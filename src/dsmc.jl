@@ -201,7 +201,7 @@ function evolve(positions, velocities, accel, duration, measure, a_sc, F)
     # Dynamic quantities
     t = 0 # Time
     Nt = Nt_max # Current number of test particles
-    dt = 0.001 # Initial timestep
+    dt = 0.0001 # Initial timestep
     peak_density = Nt / (maximum(position_array)^3) # Rough initial peak density estimate
 
     # Iterate simulation

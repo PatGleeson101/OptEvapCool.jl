@@ -23,7 +23,7 @@ function test()
     # Simulation parameters
     # Physical particles
     Np = 1e5 # Initial number
-    duration = 2 # Virtual simulation time (s)
+    duration = 2.0 # Virtual simulation time (s)
     m = 1.44e-25 # Atomic mass (kg)
     a_sc = 1e-8 # s-wave scattering length
     #T0 = 1e-6 # Approximate initial temperature (K)
@@ -111,8 +111,8 @@ function test()
     # Cloud distribution
     final_speeds = vec(sqrt.(sum(final_vel .* final_vel, dims = 1)))
     # Ideal velocity probability distribution in thermal equilibrium
-    N0 = 4π*(m / (2π * kB * T_final))^1.5; # Normalisation constant
-    fv(v) = N0 * v^2 * exp(-0.5 * m * v^2 / (kB * T_final)) # Ideal distribution
+    N0 = 4π*(m / (2π * kB * T_theory))^1.5; # Normalisation constant
+    fv(v) = N0 * v^2 * exp(-0.5 * m * v^2 / (kB * T_theory)) # Ideal distribution
     speed_domain = range(0, stop=1.2 * maximum(final_speeds), length = 100)
     theoretical_speed_density = fv.(speed_domain)
     # Plot ideal and actual speed distributions
@@ -135,6 +135,11 @@ function test()
     rolling_cand_rate = rolling(sum, cand_counts, window_size) ./ rolling_timesteps
 
     rate_final = F * last(rolling_coll_rate)
+    # Theoretical mean density and speed
+    nbar = Np * ω_x * ω_y * ω_z * (m / (4π * kB * T_theory))^1.5
+    vbar = sqrt(8*kB*T_theory/(π*m))
+    σ = 8π * a_sc^2
+    rate_theory = 1/sqrt(2)* Np * nbar * σ * vbar
 
     collision_plt = plot(time_series,
         [instant_cand_rate,
@@ -155,6 +160,7 @@ function test()
                        "Collisions (test)",
                        "Collisions (real)"),
           linecolor = linecolors)
+    hline!([rate_theory], linestyle = :dash, label="Theory (real)")
 
     return temperature_plt, energy_plt, speed_hist, collision_plt
 end
