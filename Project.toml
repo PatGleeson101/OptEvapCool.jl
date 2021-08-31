@@ -1,0 +1,8 @@
+author = "Patrick Gleeson <patrickgleeson101@gmail.com>"
+name = "OptEvapCool"
+uuid = 4e692e60-ff15-4771-9c7d-e46a4f597447
+
+[deps]
+LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+RollingFunctions = "b0e4dd01-7b14-53d8-9b45-175a3e362653"

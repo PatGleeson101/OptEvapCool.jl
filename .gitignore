@@ -31,3 +31,9 @@ log/
 
 # MacOS file system management
 .DS_Store
+
+# VSCode
+.vscode/
+
+# Ad-hoc testing
+test/dev.ipynb
