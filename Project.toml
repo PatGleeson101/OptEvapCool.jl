@@ -1,8 +1,10 @@
-author = "Patrick Gleeson <patrickgleeson101@gmail.com>"
 name = "OptEvapCool"
 uuid = "4e692e60-ff15-4771-9c7d-e46a4f597447"
+author = "Patrick Gleeson <patrickgleeson101@gmail.com>"
 
 [deps]
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 RollingFunctions = "b0e4dd01-7b14-53d8-9b45-175a3e362653"

@@ -57,3 +57,7 @@ function harmonic_field(ωx, ωy, ωz)
 end
 
 # TODO: function gaussian_beam()
+
+function exponential_ramp(ϵ₀, τ)
+    return (t) -> ϵ₀ * exp(- t / τ)
+end

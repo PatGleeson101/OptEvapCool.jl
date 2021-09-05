@@ -1,18 +1,35 @@
 # Test of DSMC with Harmonic potential
-
-using StatsPlots
-using Random
-using Printf
-# using BenchmarkTools
+using Revise
+using Random: MersenneTwister
+using Printf: @sprintf
+using Logging
 using LaTeXStrings
-#using StatsBase: fit, Histogram
 using RollingFunctions: rollmean, rolling
+using StatsPlots # supersedes Plots
+# using StatsBase: fit, Histogram
+# using BenchmarkTools
 include("../src/OptEvapCool.jl")
 using .OptEvapCool
 
-function test()
-    #Random.seed!(1) # Set random generator seed
+# Wrapper method to run with specific seed.
+function test(seed)
+    test(rng=MersenneTwister(seed))
+end
 
+# Set global logging
+const console_logger = ConsoleLogger()
+global_logger(console_logger)
+
+# Debug formatting
+function debug_fmt(level::LogLevel, _module, group, id, file, line)
+    @nospecialize
+    color = Base.debug_color()
+    prefix = "Debug: ($(basename(file)): line $(line))\n"
+    suffix = "\n"
+    return color, prefix, suffix
+end
+
+function test(rng=MersenneTwister())
     # Measurement storage
     time_series = zeros(0)
     pe_series = zeros(0)
@@ -23,10 +40,11 @@ function test()
     # Simulation parameters
     # Physical particles
     Np = 1e5 # Initial number
-    duration = 2.0 # Virtual simulation time (s)
+    duration = 1 # Virtual simulation time (s)
     m = 1.44e-25 # Atomic mass (kg)
     a_sc = 1e-8 # s-wave scattering length
-    #T0 = 1e-6 # Approximate initial temperature (K)
+    σ = 8 * pi * a_sc^2 # Total collision cross section
+    # T0 = 1e-6 # Approximate initial temperature (K)
     ω_x = 2π * 150; # Trapping frequencies
     ω_y = 2π * 150;
     ω_z = 2π * 15;
@@ -35,6 +53,7 @@ function test()
     # Test particles
     F = 10 # Number of real particles per test particle
     Nt = ceil(UInt64, Np / F) # Initial number
+    Nc = 1 # Target average for number of atoms per cell
 
     # Cube initialisation (at T = approx. 1 microkelvin)
     v_th = 0.01 # Average speed in a single dimension
@@ -49,16 +68,22 @@ function test()
     measure = record(time_series, ke_series, pe_series,
                      cand_counts, coll_counts, m, potential)
 
+    # Debug logging (Change Logging.Info to Logging.Debug to log to file)
+    io = open("./test/log.txt", "w+")
+    file_logger = ConsoleLogger(io, Logging.Info, meta_formatter = debug_fmt)
     # Run evolution
-    final_pos, final_vel = evolve(positions, velocities, accel,
-                                  duration, measure, a_sc, F)
+    final_pos, final_vel = evolve(positions, velocities, accel, duration, σ,
+        ω_x, m, F, Nc, measure, rng, file_logger)
+    # Close debug log
+    flush(io)
+    close(io)
     
     # PLOTTING + ANALYSIS
 
     # Set up rolling window
-    window_time = 1e-2 # Desired window timestep
+    window_time = 1e-2 # Desired window time interval
     # Get window size in number of iterations
-    window_size = ceil(Int64, length(time_series) * window_time/duration)
+    window_size = ceil(Int64, length(time_series) * window_time / duration)
     rolling_time = rollmean(time_series, window_size)
 
     # Temperature
@@ -71,15 +96,15 @@ function test()
     linecolor = RGB(0.1, 0.1, 0.7)
 
     temperature_plt = plot(time_series, instant_temperature,
-        title = "Average temperature (Final: $(@sprintf("%.3E", T_final)) K)",
-        xlabel = "Time (s)",
-        ylabel = "Temperature (K)",
-        label = false,
-        linealpha = 0.5,
-        linecolor = linecolor)
+        title="Average temperature (Final: $(@sprintf("%.3g", T_final)) K)",
+        xlabel="Time (s)",
+        ylabel="Temperature (K)",
+        label=false,
+        linealpha=0.5,
+        linecolor=linecolor)
     plot!(rolling_time, rolling_temperature,
-          linecolor = linecolor, label="Simulation")
-    hline!([T_theory], linestyle = :dash, label="Theory")
+          linecolor=linecolor, label="Simulation")
+    hline!([T_theory], linestyle=:dash, label="Theory")
 
     # Energy
     instant_ke = ke_series / (kB * T_theory) # KE in units of kT (final)
@@ -89,39 +114,39 @@ function test()
     E_final = last(rolling_e) * kB * T_theory # Final energy per particle in J
     # Theoretical final total energy/atom (units kT)
     E_theory = E_initial / (kB * T_theory)
-    linecolors = hcat(RGB(0.1059,0.6196,0.4667),
-                      RGB(0.851,0.373,0),
-                      RGB(0.459,0.439,0.702))
+    linecolors = hcat(RGB(0.1059, 0.6196, 0.4667),
+                      RGB(0.851, 0.373, 0),
+                      RGB(0.459, 0.439, 0.702))
 
     energy_plt = plot(time_series, [instant_ke, instant_pe, instant_e],
-        title = "Average energy per atom (Final: $(@sprintf("%.3E", E_final)) J)",
-        xlabel = "Time (s)",
-        ylabel = L"\textrm{Energy\:\:}(k_B T_{final})",
-        label = false,
-        ylim = (0, 1.2 * maximum(instant_e)),
-        linecolor = linecolors,
-        linealpha = 0.5)
+        title="Average energy per atom (Final: $(@sprintf("%.3g", E_final)) J)",
+        xlabel="Time (s)",
+        ylabel=L"\textrm{Energy\:\:}(k_B T_{final})",
+        label=false,
+        ylim=(0, 1.2 * maximum(instant_e)),
+        linecolor=linecolors,
+        linealpha=0.5)
     plot!(rolling_time, [rolling_ke, rolling_pe, rolling_e],
-        label = ["Kinetic" "Potential" "Total"],
-        linecolor = linecolors)
-    hline!([E_theory E_theory/2],
-            linestyle = :dash,
-            label = ["Total (theory)" "Potential/Kinetic (theory)"])
+        label=["Kinetic" "Potential" "Total"],
+        linecolor=linecolors)
+    hline!([E_theory E_theory / 2],
+            linestyle=:dash,
+            label=["Total (theory)" "Potential/Kinetic (theory)"])
     
     # Cloud distribution
-    final_speeds = vec(sqrt.(sum(final_vel .* final_vel, dims = 1)))
+    final_speeds = vec(sqrt.(sum(final_vel .* final_vel, dims=1)))
     # Ideal velocity probability distribution in thermal equilibrium
-    N0 = 4π*(m / (2π * kB * T_theory))^1.5; # Normalisation constant
+    N0 = 4π * (m / (2π * kB * T_theory))^1.5; # Normalisation constant
     fv(v) = N0 * v^2 * exp(-0.5 * m * v^2 / (kB * T_theory)) # Ideal distribution
-    speed_domain = range(0, stop=1.2 * maximum(final_speeds), length = 100)
+    speed_domain = range(0, stop=1.2 * maximum(final_speeds), length=300)
     theoretical_speed_density = fv.(speed_domain)
     # Plot ideal and actual speed distributions
     speed_hist = density(final_speeds,
-                         title = "Speed distribution",
-                         label = "Simulation",
-                         xlabel = L"\textrm{Speed\:\:}(ms^{-1})",
-                         ylabel = "Probability density")
-    plot!(speed_domain, theoretical_speed_density, label = "Theory")
+                         title="Speed distribution",
+                         label="Simulation",
+                         xlabel=L"\textrm{Speed\:\:}(ms^{-1})",
+                         ylabel="Probability density")
+    plot!(speed_domain, theoretical_speed_density, label="Theory")
 
     # TODO: position distribution #fit(Histogram, final_pos[1,:])
 
@@ -130,37 +155,39 @@ function test()
     instant_coll_rate = coll_counts ./ timesteps
     instant_cand_rate = cand_counts ./ timesteps
 
-    rolling_timesteps = time_series[window_size:end]-time_series[1:end-window_size+1]
+    rolling_timesteps = time_series[window_size:end] - time_series[1:end - window_size + 1]
     rolling_coll_rate = rolling(sum, coll_counts, window_size) ./ rolling_timesteps
     rolling_cand_rate = rolling(sum, cand_counts, window_size) ./ rolling_timesteps
 
     rate_final = F * last(rolling_coll_rate)
     # Theoretical mean density and speed
     nbar = Np * ω_x * ω_y * ω_z * (m / (4π * kB * T_theory))^1.5
-    vbar = sqrt(8*kB*T_theory/(π*m))
+    vbar = sqrt(8 * kB * T_theory / (π * m))
     σ = 8π * a_sc^2
-    rate_theory = 1/sqrt(2)* Np * nbar * σ * vbar
+    rate_theory = 1 / sqrt(2) * Np * nbar * σ * vbar
 
     collision_plt = plot(time_series,
         [instant_cand_rate,
          instant_coll_rate,
          F * instant_coll_rate],
-        title = "Total collision rate (Final: $(@sprintf("%.3E", rate_final))/s)",
-        xlabel = "Time (s)",
-        ylabel = L"\textrm{Rate\:\:}(s^{-1})",
-        label = false,
-        yaxis = :log,
-        linecolor = linecolors,
-        linealpha = 0.5)
+        title="Total collision rate (Final: $(@sprintf("%.3g", rate_final))/s)",
+        xlabel="Time (s)",
+        ylabel=L"\textrm{Rate\:\:}(s^{-1})",
+        label=false,
+        linecolor=linecolors,
+        linealpha=0.5)
+        #yaxis = :log
     plot!(rolling_time,
           [rolling_cand_rate,
            rolling_coll_rate,
            F * rolling_coll_rate],
-          label = hcat("Candidates (test)",
+          label=hcat("Candidates (test)",
                        "Collisions (test)",
                        "Collisions (real)"),
-          linecolor = linecolors)
-    hline!([rate_theory], linestyle = :dash, label="Theory (real)")
+          linecolor=linecolors)
+    hline!([rate_theory], linestyle=:dash, label="Theory (real)")
+
+    #@info "\nIterations: $(length(time_series))"
 
     return temperature_plt, energy_plt, speed_hist, collision_plt
 end
