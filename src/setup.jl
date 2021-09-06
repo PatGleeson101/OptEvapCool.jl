@@ -17,6 +17,8 @@ both uniformly distributed. Also returns the indices of still-present
 atoms, which initially is all of them.
 """
 function uniform_cube_cloud(N, size, v)
+    # v: average speed in a single dimension
+    # size: half-width of position cube
     positions = 2.0 * size * (rand(Float64, 3, N) .- 0.5)
     velocities = 2.0 * v * (rand(Float64, 3, N) .- 0.5)
     return positions, velocities

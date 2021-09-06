@@ -40,7 +40,7 @@ function test(rng=MersenneTwister())
     # Simulation parameters
     # Physical particles
     Np = 1e5 # Initial number
-    duration = 1 # Virtual simulation time (s)
+    duration = 0.75 # Virtual simulation time (s)
     m = 1.44e-25 # Atomic mass (kg)
     a_sc = 1e-8 # s-wave scattering length
     σ = 8 * pi * a_sc^2 # Total collision cross section
@@ -56,9 +56,7 @@ function test(rng=MersenneTwister())
     Nc = 1 # Target average for number of atoms per cell
 
     # Cube initialisation (at T = approx. 1 microkelvin)
-    v_th = 0.01 # Average speed in a single dimension
-    gas_size = 10e-6 # Approximate size of gas cloud
-    positions, velocities = uniform_cube_cloud(Nt, gas_size, v_th)
+    positions, velocities = uniform_cube_cloud(Nt, 1e-5, 0.01)
 
     # Initial average energy per particle
     E_initial = (avg_kinetic_energy(velocities, m)
@@ -68,15 +66,9 @@ function test(rng=MersenneTwister())
     measure = record(time_series, ke_series, pe_series,
                      cand_counts, coll_counts, m, potential)
 
-    # Debug logging (Change Logging.Info to Logging.Debug to log to file)
-    io = open("./test/log.txt", "w+")
-    file_logger = ConsoleLogger(io, Logging.Info, meta_formatter = debug_fmt)
     # Run evolution
     final_pos, final_vel = evolve(positions, velocities, accel, duration, σ,
-        ω_x, m, F, Nc, measure, rng, file_logger)
-    # Close debug log
-    flush(io)
-    close(io)
+        ω_x, m, F, Nc, measure, rng)
     
     # PLOTTING + ANALYSIS
 

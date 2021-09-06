@@ -3,7 +3,6 @@ using StatsBase: samplepair, percentile
 using LinearAlgebra: norm
 using Random: MersenneTwister
 using Printf: @sprintf
-using Logging: @debug, with_logger, global_logger
 using ProgressMeter: Progress, update!
 using Dates: now
 
@@ -45,7 +44,7 @@ function assign_cells(positions, peak_free_path, Nc)
     # Cell dimensions
     V = prod(max_pos .- min_pos)
     Vc = V * Nc / N
-    ds = min(max(1e-12, cbrt(Vc)), peak_free_path)
+    ds = min(cbrt(Vc), peak_free_path) #NOTE: removed 1e-12 lower bound.
     cell_size = [ds, ds, ds];
     # Extend grid slightly beyond the furthest atoms, to
     # avoid edge atoms being placed outside the grid.
@@ -85,15 +84,7 @@ function assign_cells(positions, peak_free_path, Nc)
     cell_indices .-= cell_occupancies
 
     nonempty = (!iszero).(cell_occupancies)
-    peak_density = percentile(cell_occupancies[nonempty], 90) / prod(cell_size)
-
-    @debug @sprintf("""
-           cell ds: %.3g
-        grid shape: %i x %i x %i
-        cell count: %i
-          nonempty: %i
-        peak # density: %.3g
-    """, ds, grid_shape..., cell_count, sum(nonempty), peak_density)
+    peak_density = percentile(cell_occupancies[nonempty], 90) / Vc
 
     return Grid(cell_size, lower_pos, grid_shape, cell_occupancies,
                 cell_indices, atoms_by_cell), peak_density
@@ -176,8 +167,6 @@ function collision_step!(velocities, dt, grid, σ, F, rng=MersenneTwister())
     # If peak collisions per atom is zero, then dt_new is Infinity, and the
     # timestep will thus be limited by the other constraints (motion/trapping)
 
-    @debug "coll. cells: $(sum((!iszero).(cell_collisions)))"
-
     return dt_new, sum(cell_candidates), sum(cell_collisions)
 end
 
@@ -228,8 +217,7 @@ null_measure(_...) = nothing
 
 # Evolve initial particle population for desired duration
 function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc = 1,
-                measure = null_measure, rng=MersenneTwister(),
-                debug_logger = SimpleLogger(stdout, Logging.Info))
+                measure = null_measure, rng=MersenneTwister())
 
     # Get maximum number of test particles and check array sizes
     num_components, Nt_max = size(positions)
@@ -259,16 +247,15 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
     # Initial timestep based on trap frequency and motion limit
     dt = min(0.0001, trap_dt,
              motion_timestep(positions, velocities, accel, t, motion_limit))
-    
+    dt = 0.0001
     # Track progress
     prog_detail = 10000
-    progress = Progress(prog_detail, dt = 3, desc = "Simulation progress: ",
+    progress = Progress(prog_detail, dt = 10, desc = "Simulation progress: ",
                 color = :green, showspeed = false, enabled = true, barlen=50)
     
     # Iterate simulation
     iter_count = 0
     start_time = now()
-    with_logger(debug_logger) do
     while t < duration
         # Active particles
         positions = @view positions[:, 1:Nt]
@@ -290,13 +277,6 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
         dt = max(dt, 0.00005)
         dt = 0.0001
 
-        @debug @sprintf("""
-            coll.  dt: %.3g
-            motion dt: %.3g
-            trap.  dt: %.3g
-                   dt: %.3g
-        """, coll_dt, motion_dt, trap_dt, dt)
-
         # N = atom_loss_step!(positions, velocities, m, dt)
         if Nt < Nt_max / 2
             Nt = repopulate!(positions, velocities)
@@ -304,26 +284,41 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
         # External measurements on system after one full iteration
         measure(positions, velocities, cand_count, coll_count, t)
 
-        #with_logger(global_logger()) do; end;
         #Update progress
-        update!(progress, floor(Int, t / duration * prog_detail),
-                showvalues = [
-                    ("Virtual time", @sprintf("%.3g / %.3g s", t, duration)),
-                    ("Real time", now() - start_time),
-                    ("Iterations", iter_count),
-                    ("Coll. dt", @sprintf("%.3g", coll_dt)),
-                    ("Motion dt", @sprintf("%.3g", motion_dt)),
-                    ("Trap dt", @sprintf("%.3g", trap_dt)),
-                    ("Cell ds", @sprintf("%.3g", grid.cell_size[1])),
-                    ("Grid shape", @sprintf("%i x %i x %i", grid.shape...)),
-                    ("Cell count", prod(grid.shape)),
-                    ("Non-empty", sum((!iszero).(grid.cell_occupancies))),
-                    ("Peak density", peak_density)
-                    ])
+        if mod(iter_count, 100) == 0
+            update!(progress, ceil(Int, t / duration * prog_detail),
+                    showvalues = [
+                        ("Virtual time", @sprintf("%.3g / %.3g s", t, duration)),
+                        ("Real time", now() - start_time),
+                        ("Iterations", iter_count),
+                        ("Coll. dt", @sprintf("%.3g", coll_dt)),
+                        ("Motion dt", @sprintf("%.3g", motion_dt)),
+                        ("Trap dt", @sprintf("%.3g", trap_dt)),
+                        ("Cell ds", @sprintf("%.3g", grid.cell_size[1])),
+                        ("Grid shape", @sprintf("%i x %i x %i", grid.shape...)),
+                        ("Cell count", prod(grid.shape)),
+                        ("Non-empty", sum((!iszero).(grid.cell_occupancies))),
+                        ("Peak density", peak_density)
+                        ])
+        end
 
         iter_count += 1
     end
-    end
+
+    update!(progress, ceil(Int, t / duration * prog_detail),
+                    showvalues = [
+                        ("Virtual time", @sprintf("%.3g / %.3g s", t, duration)),
+                        ("Real time", now() - start_time),
+                        ("Iterations", iter_count),
+                        ("Coll. dt", @sprintf("%.3g", coll_dt)),
+                        ("Motion dt", @sprintf("%.3g", motion_dt)),
+                        ("Trap dt", @sprintf("%.3g", trap_dt)),
+                        ("Cell ds", @sprintf("%.3g", grid.cell_size[1])),
+                        ("Grid shape", @sprintf("%i x %i x %i", grid.shape...)),
+                        ("Cell count", prod(grid.shape)),
+                        ("Non-empty", sum((!iszero).(grid.cell_occupancies))),
+                        ("Peak density", peak_density)
+                        ])
 
     # Return final positions and velocities
     return positions, velocities
