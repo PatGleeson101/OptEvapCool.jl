@@ -1,8 +1,8 @@
 # Test of DSMC with Harmonic potential
 using Revise
+using Profile
 using Random: MersenneTwister
 using Printf: @sprintf
-using Logging
 using LaTeXStrings
 using RollingFunctions: rollmean, rolling
 using StatsPlots # supersedes Plots
@@ -16,19 +16,6 @@ function test(seed)
     test(rng=MersenneTwister(seed))
 end
 
-# Set global logging
-const console_logger = ConsoleLogger()
-global_logger(console_logger)
-
-# Debug formatting
-function debug_fmt(level::LogLevel, _module, group, id, file, line)
-    @nospecialize
-    color = Base.debug_color()
-    prefix = "Debug: ($(basename(file)): line $(line))\n"
-    suffix = "\n"
-    return color, prefix, suffix
-end
-
 function test(rng=MersenneTwister())
     # Measurement storage
     time_series = zeros(0)
@@ -39,8 +26,8 @@ function test(rng=MersenneTwister())
 
     # Simulation parameters
     # Physical particles
-    Np = 1e5 # Initial number
-    duration = 0.75 # Virtual simulation time (s)
+    Np = 1e4 # Initial number
+    duration = 0.05 # Virtual simulation time (s)
     m = 1.44e-25 # Atomic mass (kg)
     a_sc = 1e-8 # s-wave scattering length
     σ = 8 * pi * a_sc^2 # Total collision cross section
@@ -179,12 +166,11 @@ function test(rng=MersenneTwister())
           linecolor=linecolors)
     hline!([rate_theory], linestyle=:dash, label="Theory (real)")
 
-    #@info "\nIterations: $(length(time_series))"
-
     return temperature_plt, energy_plt, speed_hist, collision_plt
 end
 
+#=
 plts = test()
 for plt in plts
     display(plt)
-end
+end=#
