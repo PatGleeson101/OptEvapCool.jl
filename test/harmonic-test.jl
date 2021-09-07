@@ -1,6 +1,4 @@
 # Test of DSMC with Harmonic potential
-using Revise
-using Profile
 using Random: MersenneTwister
 using Printf: @sprintf
 using LaTeXStrings
@@ -16,7 +14,12 @@ function test(seed)
     test(rng=MersenneTwister(seed))
 end
 
-function test(rng=MersenneTwister())
+function test(Np, duration, F, Nc, rng=MersenneTwister())
+    # Np: initial number
+    # duration: vitrual simulation time (s)
+    # F: number of real particles per test particle
+    # Nc: target average number of atoms per cell
+
     # Measurement storage
     time_series = zeros(0)
     pe_series = zeros(0)
@@ -26,8 +29,6 @@ function test(rng=MersenneTwister())
 
     # Simulation parameters
     # Physical particles
-    Np = 1e4 # Initial number
-    duration = 0.05 # Virtual simulation time (s)
     m = 1.44e-25 # Atomic mass (kg)
     a_sc = 1e-8 # s-wave scattering length
     σ = 8 * pi * a_sc^2 # Total collision cross section
@@ -38,9 +39,7 @@ function test(rng=MersenneTwister())
     accel, potential = harmonic_field(ω_x, ω_y, ω_z)
 
     # Test particles
-    F = 10 # Number of real particles per test particle
-    Nt = ceil(UInt64, Np / F) # Initial number
-    Nc = 1 # Target average for number of atoms per cell
+    Nt = ceil(Int64, Np / F) # Initial number
 
     # Cube initialisation (at T = approx. 1 microkelvin)
     positions, velocities = uniform_cube_cloud(Nt, 1e-5, 0.01)
@@ -59,6 +58,7 @@ function test(rng=MersenneTwister())
     
     # PLOTTING + ANALYSIS
 
+    #=
     # Set up rolling window
     window_time = 1e-2 # Desired window time interval
     # Get window size in number of iterations
@@ -166,11 +166,9 @@ function test(rng=MersenneTwister())
           linecolor=linecolors)
     hline!([rate_theory], linestyle=:dash, label="Theory (real)")
 
-    return temperature_plt, energy_plt, speed_hist, collision_plt
+    display(temperature_plt)
+    display(energy_plt)
+    display(speed_hist)
+    display(collision_plt)
+    return nothing=#
 end
-
-#=
-plts = test()
-for plt in plts
-    display(plt)
-end=#

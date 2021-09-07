@@ -8,20 +8,21 @@ using Dates: now
 
 # Storage of essential atom cloud data
 mutable struct AtomCloud
-    position_buffer :: Matrix{Float64}
-    velocity_buffer :: Matrix{Float64}
-    assignment_buffer :: Vector{Int64}
-    cell_buffer :: Vector{Int64}
-    occupancy_buffer :: Vector{Int64}
+    # BUFFERS
+    positions :: Matrix{Float64}
+    velocities :: Matrix{Float64}
+    assignments :: Vector{Int64}
+    cell_offsets :: Vector{Int64}
+    cell_occupancies :: Vector{Int64}
+    atom_lookup :: Vector{Int64}
 
-    positions :: SubArray
-    velocities :: SubArray
-    cell_offsets :: SubArray
-    cell_occupancies :: SubArray
-
+    Nt :: Int64
+    F :: Float64
+    cellcount :: Int64
+    nonempty_count :: Int64
     cellsize :: Vector{Float64}
 
-    function AtomCloud(positions, velocities)
+    function AtomCloud(positions, velocities, F)
         # Check that array sizes are 3 x Nt; (Nt = initial # test particles)
         num_components, Nt = size(positions)
         size(velocities) != (num_components, Nt) && throw(DimensionMismatch(
@@ -31,21 +32,20 @@ mutable struct AtomCloud
             "Position and velocity must have three components.")
         )
         # Create atom buffers
-        posbuf = copy(positions)
-        velbuf = copy(velocities)
-        pos = view(posbuf, :, 1:Nt)
-        vel = view(velbuf, :, 1:Nt)
-        assbuf = zeros(Int64, Nt)
-        # Following buffers and data will be overwritten on first iteration
-        celbuf = zeros(Int64, 1)
-        occbuf = zeros(Int64, 1)
-        offsets = view(celbuf, 1:1)
-        occupancies = view(occbuf, 1:1)
-        cellsize = [0.0, 0.0, 0.0]
+        pos = copy(positions)
+        vel = copy(velocities)
+        assign = zeros(Int64, Nt)
+        atoms = zeros(Int64, Nt)
+        offsets = zeros(Int64, 1)     # To be overwritten
+        occupancies = zeros(Int64, 1) # on first iteration
 
-        # Return cloud AND initial number of atoms
-        return new(posbuf, velbuf, assbuf, celbuf, occbuf,
-                   pos, vel, offsets, occupancies, cellsize), Nt
+        cellsize = [0.0, 0.0, 0.0]
+        nonempty_count = 1 # To be overwritten
+        cellcount = 1      # on first iteration
+
+        # Return cloud
+        return new(pos, vel, assign, offsets, occupancies, atoms,
+                   Nt, F, cellcount, nonempty_count, cellsize)
     end
 end
 
@@ -55,17 +55,21 @@ function verlet_step!(cloud, accel, t, dt)
     # Half timestep
     half_dt = dt / 2.0
     # Approximate position half-way through time-step
-    positions .+= half_dt .* velocities
+    for i in eachindex(positions)
+        positions[i] += half_dt * velocities[i]
+    end
     # Acceleration halfway through timestep.
     velocities .+= dt .* accel(positions, t + half_dt)
     # Updated positions at end of timestep
-    positions .+= half_dt .* velocities
+    for i in eachindex(positions)
+        positions[i] += half_dt * velocities[i]
+    end
 end
 
 # Assign particles to cells
 function assign_cells!(cloud, peak_free_path, Nc)
-    positions, velocities = cloud.positions, cloud.velocities
-    N = size(positions, 2)
+    N = cloud.Nt
+    positions = view(cloud.positions, :, 1:N)
 
     # Corners of the bounding box around all atoms
     minpos = minimum(positions, dims=2)
@@ -86,20 +90,23 @@ function assign_cells!(cloud, peak_free_path, Nc)
     cellcount = prod(gridshape)
 
     # Ensure storage buffers are large enough.
-    if cellcount > length(cloud.cell_buffer)
-        cloud.cell_buffer = zeros(Int64, cellcount)
-        cloud.occupancy_buffer = zeros(Int64, cellcount)
+    if cellcount > length(cloud.cell_offsets)
+        cloud.cell_offsets = zeros(Int64, cellcount * 2)
+        cloud.cell_occupancies = zeros(Int64, cellcount * 2)
     end
-    cell_offsets = view(cloud.cell_buffer, 1:cellcount)
-    cell_occupancies = view(cloud.occupancy_buffer, 1:cellcount)
+    cell_offsets = view(cloud.cell_offsets, 1:cellcount)
+    cell_occupancies = view(cloud.cell_occupancies, 1:cellcount)
     fill!(cell_offsets, 0)
     fill!(cell_occupancies, 0)
 
     # Assign atoms to cells and count the number of atoms in each cell.
-    assignments = view(cloud.assignment_buffer, 1:N)
+    assignments = cloud.assignments
     xcount, ycount, _ = gridshape
+    lx, ly, lz = lowerpos # Cache lower coordinates
     for atom in 1:N
-        x, y, z = ceil.(Int64, (positions[:,atom] - lowerpos) ./ cellsize)
+        x = ceil(Int64, (positions[1, atom] - lx) / ds)
+        y = ceil(Int64, (positions[2, atom] - ly) / ds)
+        z = ceil(Int64, (positions[3, atom] - lz) / ds)
         cell = x + xcount * ( (y - 1) + ycount * (z - 1) )
         assignments[atom] = cell
         cell_occupancies[cell] += 1
@@ -115,15 +122,12 @@ function assign_cells!(cloud, peak_free_path, Nc)
         end
     end
 
-    # Rearrange atoms to be in cell-order.
+    # Create lookup index of atoms in each cell.
     # This temporarily modifies the cell offsets.
-    sorted_positions = zeros(Float64, 3, N)
-    sorted_velocities = zeros(Float64, 3, N)
+    atom_lookup = cloud.atom_lookup
     for atom in 1:N
         cell = assignments[atom]
-        sorted_index = cell_offsets[cell]
-        sorted_positions[:, sorted_index] = positions[:,atom]
-        sorted_velocities[:, sorted_index] = velocities[:,atom]
+        atom_lookup[ cell_offsets[cell] ] = atom
         cell_offsets[cell] += 1
     end
 
@@ -140,58 +144,58 @@ function assign_cells!(cloud, peak_free_path, Nc)
         end
     end
 
-    # Record offsets and occupancies for non-empty cells
-    cloud.cell_offsets = view(cloud.cell_buffer, 1:nonempty_count)
-    cloud.cell_occupancies = view(cloud.occupancy_buffer, 1:nonempty_count)
+    cloud.nonempty_count = nonempty_count
+    cloud.cellcount = cellcount
 
-    # Compute peak density
-    peak_density = percentile(cloud.cell_occupancies, 95) / Vc
+    # Compute peak density. Unlike collision rate, cell occupancies *need* to
+    # be stored, so we might as well take a percentile.
+    peak_density = percentile(cell_occupancies, 95) / Vc
 
     return peak_density, gridshape
 end
 
 # Simulate collisions
 function collision_step!(cloud, dt, σ, F, rng=MersenneTwister())
+    cellcount = cloud.nonempty_count
     Ncs = cloud.cell_occupancies
     offsets = cloud.cell_offsets
-    cellcount = length(offsets)
     velocities = cloud.velocities
-
-    # Compute maximum speed in each cell
-    sq_speeds = sum(velocities .* velocities, dims=1) # Squared speeds
-    max_speeds = sqrt.([
-        maximum( sq_speeds[ offsets[cell] : offsets[cell] + Ncs[cell] - 1])
-        for cell in 1:cellcount
-    ])
-
-    # Calculate number of pairs to check in each cell
-    Vc = prod(cloud.cellsize) # Cell volume
-    Mraw = F * (dt * σ / Vc) * Ncs .* (Ncs .- 1) .* max_speeds # Unrounded pairs
-    Mcand = ceil.(Int64, Mraw) # Rounded number of pairs in each cell
-    prob_adjustment = Mraw ./ Mcand # Account for rounding in probabilities
-
-    # Pre-compute random numbers for checking collision success
-    cand_success = rand(rng, sum(Mcand))
+    atom_lookup = cloud.atom_lookup
 
     # Check appropriate number of pairs in each cell
-    Mcoll = zeros(Int64, cellcount)
-    cand_counter = 0
+    #Mcoll = zeros(Int64, cellcount)
+    Vc = prod(cloud.cellsize) # Cell volume
+    max_colls_per_atom = 0
+    tot_cand, tot_coll = 0, 0
     for cell in 1:cellcount
         Nc = Ncs[cell]
         (Nc < 2) && continue # Skip cells with 1 particle
-        # Get cell info
         offset = offsets[cell]
-        Mc = Mcand[cell]
-        prob_coeff = prob_adjustment[cell] / max_speeds[cell]
-        # Check Mc candidate pairs
-        for _ in 1:Mc
-            atom1, atom2 = samplepair(rng, Nc) .+ (offset - 1)
+        # Compute maximum speed
+        max_speed = 0
+        for i in offset : offset + Nc - 1
+            atom = atom_lookup[i]
+            vx = velocities[1, atom]
+            vy = velocities[2, atom]
+            vz = velocities[3, atom]
+            max_speed = max(max_speed, sqrt(vx^2 + vy^2 + vz^2))
+        end
+        # Select appropriate number of pairs
+        Mraw = F * (dt * σ / Vc) * Nc * (Nc - 1) * max_speed
+        Mcand = ceil(Int64, Mraw)
+        Mcoll = 0
+        prob_adjust = Mraw / Mcand # Adjustment for rounding
+        prob_coeff = prob_adjust / max_speed
+        # Check and perform collisions
+        for _ in 1:Mcand
+            i1, i2 = samplepair(rng, Nc) .+ (offset - 1)
+            atom1 = atom_lookup[i1]
+            atom2 = atom_lookup[i2]
             # Get current velocities
-            u1 = velocities[:,atom1]
-            u2 = velocities[:,atom2]
+            u1 = view(velocities, :, atom1)
+            u2 = view(velocities, :, atom2)
             urel = norm(u2 - u1)
-            pcoll = urel * prob_coeff # Collision probability
-            if cand_success[cand_counter += 1] < pcoll
+            if rand() < urel * prob_coeff # Collision probability
                 # Compute new relative velocity
                 ϕ = 2 * π * rand(rng)
                 cosθ = 2 * rand(rng) - 1
@@ -201,75 +205,84 @@ function collision_step!(cloud, dt, σ, F, rng=MersenneTwister())
                 vcm = 0.5 * (u1 + u2)
                 v1 = vcm + 0.5 * vrel;
                 v2 = vcm - 0.5 * vrel;
-                velocities[:,atom1] = v1;
-                velocities[:,atom2] = v2;
+                velocities[:, atom1] = v1;
+                velocities[:, atom2] = v2;
                 # Update cell's collision count and maximum speed
-                max_speeds[cell] = max(max_speeds[cell], norm(v1), norm(v2))
-                prob_coeff = prob_adjustment[cell] / max_speeds[cell]
-                Mcoll[cell] += 1
+                max_speed = max(max_speed, norm(v1), norm(v2))
+                prob_coeff = prob_adjust / max_speed
+                Mcoll += 1
             end
         end
+        max_colls_per_atom = max(max_colls_per_atom, Mcoll / Nc)
+        tot_cand += Mcand
+        tot_coll += Mcoll
     end
 
     # Calculate new maximum timestep based on collision rate
-    colls_per_atom = Mcoll ./ Ncs
-    peak_colls_per_atom = percentile(colls_per_atom, 95)
-    lower_coll_time = dt / (2 * peak_colls_per_atom)
+    min_coll_time = dt / (2 * max_colls_per_atom)
     # If peak collisions per atom is zero, then dt is Infinity, and the
     # timestep will be limited by the other constraints (motion/trapping)
-    dt = 0.5 * lower_coll_time
+    dt = min_coll_time
 
-    return dt, sum(Mcand), sum(Mcoll)
+    return dt, tot_cand, tot_coll
 end
 
 # Atom loss effects: high-energy particles, three-body recombination &
 # background collisions.
 function atom_loss_step!(cloud, m, ε, dt)
     # Perfect loss model
-    N0 = size(positions, 2)
-    N = N0
-    for i in N0:-1:1
-        v = velocities[:,i]
-        ke = 0.5 * m * v .^2
+    velocities = cloud.velocities
+    N₀=cloud.Nt
+    N = N₀
+    for i in N₀:-1:1
+        vx, vy, vz = view(velocities, :, i)
+        ke = 0.5 * m * (vx^2 + vy^2 + vz^2)
         if ke > ε
             # Remove atom by replacing it with atom from the end
-            velocities[:,i] = velocities[:,N]
-            positions[:,i] = positions[:,N]
+            velocities[:,i] = view(velocities, :, N)
+            positions[:,i] = view(positions, :, N)
             N -= 1
         end
     end
 
+    cloud.Nt = N
     return N
 end
 
 # Repopulate cloud by creating a duplicate of each
 # particle, with the opposite velocity.
-function duplicate!(cloud, F)
-    positions = copy(cloud.positions)
-    velocities = copy(cloud.velocities)
-    N₀ = size(positions, 2)
+function duplicate!(cloud)
+    N₀ = cloud.Nt
     N₁ = 2 * N₀
-    if N₁ > size(cloud.position_buffer, 2)
-        # Resize buffer (only necessary if you increase # atoms)
-        cloud.position_buffer = zeros(Float64, 3, N₀)
-        cloud.velocity_buffer = zeros(Float64, 3, N₀)
-        cloud.position_buffer[1:N₀] .= positions
-        cloud.velocity_buffer[1:N₀] .= velocities
+    positions = view(cloud.positions, :, 1:N₀)
+    velocities = view(cloud.velocities, :, 1:N₀)
+    if N₁ > size(cloud.positions, 2) # Buffer requires resizing
+        cloud.positions = hcat(positions, positions)
+        cloud.positions = hcat(velocities, -velocities)
+    else # No resize required
+        cloud.positions[:, N₀+1 : N₁] = positions
+        cloud.velocities[:, N₀+1 : N₁] = -velocities
     end
-    cloud.position_buffer[N₀+1 : N₁] .= positions
-    cloud.velocity_buffer[N₀+1 : N₁] .= velocities
-    return N₁, F/2
+
+    cloud.Nt = N₁
+    cloud.F /= 2
+
+    return nothing
 end
 
 # Estimate for an appropriate motion timestep
 function motion_timestep(cloud, accel, t, motion_limit)
-    accels = sqrt.( sum( accel(cloud.positions, t).^2, dims=1) )
-    speeds = sqrt.( sum(cloud.velocities .^2, dims=1) )
-    motion_timesteps = vec(motion_limit ./ (accels .* speeds))
-    return percentile(motion_timesteps, 5)
-    # Note that infinities (if certain particles have a=0 or v=0)
-    # are handled correctly by the percentile function (but of course
-    # won't be in the bottom percentiles)
+    max_timestep = 0
+    acc = accel(view(cloud.positions, :, 1:cloud.Nt), t)
+    for atom in 1:cloud.Nt
+        vx, vy, vz = view(cloud.velocities, :, atom)
+        speed = sqrt(vx^2 + vy^2 + vz^2)
+        max_timestep = max(max_timestep, motion_limit / (acc[atom] * speed))
+    end
+
+    return 0.9e-8 * max_timestep
+    # Note that max_timestep may be infinite, if some particles have
+    # zero speed or acceleration. This is fine.
 end
 
 # Dummy measure function if no measurement function provided
@@ -280,28 +293,22 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
                 measure = null_measure, rng=MersenneTwister())
     # Note: Nc is the target for average # atoms per cell.
     # Initialise cloud
-    cloud, Nt_max = AtomCloud(positions, velocities)
+    cloud = AtomCloud(positions, velocities, F)
 
-    # Dynamic quantities
+    Nt = cloud.Nt
     t = 0 # Time
-    Nt = Nt_max # Current number of test particles
-
     # Initial peak density (1e-5 limits max cell width)
     peak_density, _ = assign_cells!(cloud, 1e-5, Nc)
-
     # Proportionality constant relating timestep with max. acceleration
     motion_limit = 0.01
-
     # Maximum timestep based on trap frequency
     trap_dt = 0.1 * 2π / ω_max
-
     # Initial timestep based on trap frequency and motion limit
-    #dt = min(0.0001, trap_dt, motion_timestep(cloud, accel, t, motion_limit))
-    dt = 0.0001
+    dt = min(trap_dt, motion_timestep(cloud, accel, t, motion_limit))
 
     # Track progress
     prog_detail = 10000
-    progress = Progress(prog_detail, dt = 10, desc = "Simulation progress: ",
+    progress = Progress(prog_detail, dt = 1, desc = "Simulation progress: ",
                 color = :green, showspeed = false, enabled = true, barlen=50)
     
     # Iterate simulation
@@ -320,19 +327,20 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
         # Perform collisions and update timestep
         coll_dt, cand_count, coll_count = collision_step!(cloud, dt, σ, F, rng)
         motion_dt = motion_timestep(cloud, accel, t, motion_limit)
-        #dt = min(coll_dt, trap_dt, motion_dt)
-        dt = 0.0001
+        dt = min(coll_dt, trap_dt, motion_dt)
 
         # Nt = atom_loss_step!(cloud, m, dt)
-        if Nt < Nt_max / 2
-            Nt, F = duplicate!(cloud, F)
+        Nt = cloud.Nt
+        if Nt < size(cloud.positions, 2) / 2
+            duplicate!(cloud)
         end
 
         # External measurements on system after one full iteration
-        measure(positions, velocities, cand_count, coll_count, t)
+        measure(view(cloud.positions, :, 1:Nt), view(cloud.velocities, :, 1:Nt),
+                cand_count, coll_count, t)
 
         #Update progress
-        if mod(iter_count, 100) == 0
+        if (mod(iter_count, 100) == 0) || (t >= duration)
             update!(progress, ceil(Int64, prog_detail * t / duration),
                 showvalues = [
                 ("Virtual time", @sprintf("%.3g / %.3g s", t, duration)),
@@ -343,7 +351,7 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
                 ("Trap dt", @sprintf("%.3g", trap_dt)),
                 ("Cell size", @sprintf("%.3g x %.3g x %.3g", cloud.cellsize...)),
                 ("Grid shape", @sprintf("%i x %i x %i", gridshape...)),
-                ("Non-empty cell count", length(cloud.cell_offsets)),
+                ("Non-empty cell count", cloud.nonempty_count),
                 ("Peak density", peak_density)
                 ])
         end
@@ -351,14 +359,6 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
         iter_count += 1
     end
 
-    # Final update
-    update!(progress, ceil(Int64, prog_detail * t / duration),
-        showvalues = [
-        ("Virtual time", @sprintf("%.3g / %.3g s", t, duration)),
-        ("Real time", now() - start_time),
-        ("Iterations", iter_count),
-        ])
-
     # Return final positions and velocities
-    return cloud.positions, cloud.velocities
+    return cloud.positions[:,1:Nt], cloud.velocities[:,1:Nt]
 end
