@@ -11,6 +11,7 @@ mutable struct AtomCloud
     # BUFFERS
     positions :: Matrix{Float64}
     velocities :: Matrix{Float64}
+    accels :: Matrix{Float64}
     assignments :: Vector{Int64}
     cell_offsets :: Vector{Int64}
     cell_occupancies :: Vector{Int64}
@@ -34,6 +35,7 @@ mutable struct AtomCloud
         # Create atom buffers
         pos = copy(positions)
         vel = copy(velocities)
+        acc = zeros(Float64, 3, Nt)
         assign = zeros(Int64, Nt)
         atoms = zeros(Int64, Nt)
         offsets = zeros(Int64, 1)     # To be overwritten
@@ -44,26 +46,39 @@ mutable struct AtomCloud
         cellcount = 1      # on first iteration
 
         # Return cloud
-        return new(pos, vel, assign, offsets, occupancies, atoms,
+        return new(pos, vel, acc, assign, offsets, occupancies, atoms,
                    Nt, F, cellcount, nonempty_count, cellsize)
     end
 end
 
-# Velocty Verlet step
-function verlet_step!(cloud, accel, t, dt)
-    positions, velocities = cloud.positions, cloud.velocities
+# Velocty Verlet step + calculate motion-based limit on next timestep
+function verlet_step!(cloud, accel, t, dt, motion_limit)
+    Nt = cloud.Nt
+    positions = view(cloud.positions, :, 1:Nt)
+    velocities = view(cloud.velocities, :, 1:Nt)
+    accels = view(cloud.accels, :, 1:Nt)
     # Half timestep
     half_dt = dt / 2.0
-    # Approximate position half-way through time-step
-    for i in eachindex(positions)
+    # Approximate position half-way through timestep
+    for i in eachindex(positions) # Elementwise iteration
         positions[i] += half_dt * velocities[i]
     end
-    # Acceleration halfway through timestep.
-    velocities .+= dt .* accel(positions, t + half_dt)
-    # Updated positions at end of timestep
-    for i in eachindex(positions)
-        positions[i] += half_dt * velocities[i]
+    # Acceleration halfway through timestep (modifies cloud.accels in-place)
+    accel(positions, t + half_dt, accels)
+    # Compute final velocities and positions, as well as new timestep
+    min_timestep = Inf
+    for atom in 1:Nt
+        a = view(accels, :, atom)
+        v = view(velocities, :, atom)   
+        v .+= dt .* a # Update velocity
+        positions[:, atom] .+= half_dt .* v # Update position
+        speed = norm(v)
+        acc = norm(a)
+        timestep = motion_limit / (acc * speed)
+        min_timestep = min(min_timestep, timestep)
     end
+
+    return min_timestep
 end
 
 # Assign particles to cells
@@ -244,9 +259,8 @@ function atom_loss_step!(cloud, m, ε, dt)
             N -= 1
         end
     end
-
     cloud.Nt = N
-    return N
+    return nothing
 end
 
 # Repopulate cloud by creating a duplicate of each
@@ -259,6 +273,7 @@ function duplicate!(cloud)
     if N₁ > size(cloud.positions, 2) # Buffer requires resizing
         cloud.positions = hcat(positions, positions)
         cloud.positions = hcat(velocities, -velocities)
+        cloud.accels = zeros(Float64, 3, N₁)
     else # No resize required
         cloud.positions[:, N₀+1 : N₁] = positions
         cloud.velocities[:, N₀+1 : N₁] = -velocities
@@ -268,21 +283,6 @@ function duplicate!(cloud)
     cloud.F /= 2
 
     return nothing
-end
-
-# Estimate for an appropriate motion timestep
-function motion_timestep(cloud, accel, t, motion_limit)
-    max_timestep = 0
-    acc = accel(view(cloud.positions, :, 1:cloud.Nt), t)
-    for atom in 1:cloud.Nt
-        vx, vy, vz = view(cloud.velocities, :, atom)
-        speed = sqrt(vx^2 + vy^2 + vz^2)
-        max_timestep = max(max_timestep, motion_limit / (acc[atom] * speed))
-    end
-
-    return 0.9e-8 * max_timestep
-    # Note that max_timestep may be infinite, if some particles have
-    # zero speed or acceleration. This is fine.
 end
 
 # Dummy measure function if no measurement function provided
@@ -295,16 +295,14 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
     # Initialise cloud
     cloud = AtomCloud(positions, velocities, F)
 
-    Nt = cloud.Nt
-    t = 0 # Time
     # Initial peak density (1e-5 limits max cell width)
     peak_density, _ = assign_cells!(cloud, 1e-5, Nc)
     # Proportionality constant relating timestep with max. acceleration
     motion_limit = 0.01
     # Maximum timestep based on trap frequency
     trap_dt = 0.1 * 2π / ω_max
-    # Initial timestep based on trap frequency and motion limit
-    dt = min(trap_dt, motion_timestep(cloud, accel, t, motion_limit))
+    dt = trap_dt # Initial timestep
+    dt = 1e-4
 
     # Track progress
     prog_detail = 10000
@@ -312,32 +310,35 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
                 color = :green, showspeed = false, enabled = true, barlen=50)
     
     # Iterate simulation
+    t = 0 # Time
     iter_count = 0
     start_time = now()
     while t < duration
         # Collisionless motion
-        verlet_step!(cloud, accel, t, dt)
+        motion_dt = verlet_step!(cloud, accel, t, dt, motion_limit)
 
         # Sort atoms by cell
         peak_free_path = 1 / (4 * peak_density * σ);
         peak_density, gridshape = assign_cells!(cloud, peak_free_path, Nc)
 
-        t += dt # Increment time now, before dt is updated
-
-        # Perform collisions and update timestep
+        # Perform collisions
         coll_dt, cand_count, coll_count = collision_step!(cloud, dt, σ, F, rng)
-        motion_dt = motion_timestep(cloud, accel, t, motion_limit)
-        dt = min(coll_dt, trap_dt, motion_dt)
 
         # Nt = atom_loss_step!(cloud, m, dt)
-        Nt = cloud.Nt
-        if Nt < size(cloud.positions, 2) / 2
+        if cloud.Nt < size(cloud.positions, 2) / 2
             duplicate!(cloud)
         end
 
+        # Increment time and then update timestep
+        t += dt
+        dt = min(coll_dt, trap_dt, motion_dt)
+        dt = 1e-4
+
         # External measurements on system after one full iteration
+        #=
         measure(view(cloud.positions, :, 1:Nt), view(cloud.velocities, :, 1:Nt),
                 cand_count, coll_count, t)
+        =#
 
         #Update progress
         if (mod(iter_count, 100) == 0) || (t >= duration)
@@ -360,5 +361,5 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
     end
 
     # Return final positions and velocities
-    return cloud.positions[:,1:Nt], cloud.velocities[:,1:Nt]
+    return cloud.positions[:,1:cloud.Nt], cloud.velocities[:,1:cloud.Nt]
 end

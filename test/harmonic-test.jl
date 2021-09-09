@@ -1,6 +1,6 @@
 # Test of DSMC with Harmonic potential
-using Random: MersenneTwister
-using Printf: @sprintf
+using Random:MersenneTwister
+using Printf:@sprintf
 using LaTeXStrings
 using RollingFunctions: rollmean, rolling
 using StatsPlots # supersedes Plots
@@ -58,7 +58,7 @@ function test(Np, duration, F, Nc, rng=MersenneTwister())
     
     # PLOTTING + ANALYSIS
 
-    #=
+    #= 
     # Set up rolling window
     window_time = 1e-2 # Desired window time interval
     # Get window size in number of iterations
@@ -169,6 +169,6 @@ function test(Np, duration, F, Nc, rng=MersenneTwister())
     display(temperature_plt)
     display(energy_plt)
     display(speed_hist)
-    display(collision_plt)
-    return nothing=#
+    display(collision_plt) =#
+    return nothing
 end

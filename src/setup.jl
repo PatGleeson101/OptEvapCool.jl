@@ -50,7 +50,10 @@ end
 function harmonic_field(ωx, ωy, ωz)
     ω_squared = [ωx^2, ωy^2, ωz^2]
     # Acceleration
-    accel(positions, t) = (- ω_squared .* positions)
+    function accel(positions, t, out=copy(positions))
+        out .= .- ω_squared .* positions
+        return out
+    end
     # Potential of each particle, _per mass_
     potential(positions, m, t) = (
         0.5 * m * sum(ω_squared .* (positions .^2), dims = 1)
