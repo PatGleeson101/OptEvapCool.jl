@@ -1,13 +1,12 @@
 # Test of DSMC with Harmonic potential
-using Random:MersenneTwister
-using Printf:@sprintf
+using Random: MersenneTwister
+using Printf: @sprintf
 using LaTeXStrings
 using RollingFunctions: rollmean, rolling
 using StatsPlots # supersedes Plots
 # using StatsBase: fit, Histogram
 # using BenchmarkTools
-include("../src/OptEvapCool.jl")
-using .OptEvapCool
+using OptEvapCool
 
 # Wrapper method to run with specific seed.
 function test(seed)
@@ -54,11 +53,9 @@ function test(Np, duration, F, Nc, rng=MersenneTwister())
 
     # Run evolution
     final_pos, final_vel = evolve(positions, velocities, accel, duration, σ,
-        ω_x, m, F, Nc, measure, rng)
+        ω_x, m, F = F, Nc = Nc, measure = measure, rng = rng)
     
     # PLOTTING + ANALYSIS
-
-    #= 
     # Set up rolling window
     window_time = 1e-2 # Desired window time interval
     # Get window size in number of iterations
@@ -145,30 +142,31 @@ function test(Np, duration, F, Nc, rng=MersenneTwister())
     σ = 8π * a_sc^2
     rate_theory = 1 / sqrt(2) * Np * nbar * σ * vbar
 
-    collision_plt = plot(time_series,
-        [instant_cand_rate,
-         instant_coll_rate,
-         F * instant_coll_rate],
+    collision_plt = plot(rolling_time,
+        [rolling_cand_rate,
+         rolling_coll_rate,
+         F * rolling_coll_rate],
+        label=hcat("Candidates (test)",
+                   "Collisions (test)",
+                   "Collisions (real)"),
         title="Total collision rate (Final: $(@sprintf("%.3g", rate_final))/s)",
         xlabel="Time (s)",
         ylabel=L"\textrm{Rate\:\:}(s^{-1})",
+        yaxis = :log,
+        linecolor=linecolors)
+    ylims!(ylims(collision_plt)) # Fix limits so instantaneous rates don't dominate
+    plot!(time_series,
+        [instant_cand_rate,
+         instant_coll_rate,
+         F * instant_coll_rate],
         label=false,
         linecolor=linecolors,
         linealpha=0.5)
-        #yaxis = :log
-    plot!(rolling_time,
-          [rolling_cand_rate,
-           rolling_coll_rate,
-           F * rolling_coll_rate],
-          label=hcat("Candidates (test)",
-                       "Collisions (test)",
-                       "Collisions (real)"),
-          linecolor=linecolors)
     hline!([rate_theory], linestyle=:dash, label="Theory (real)")
 
     display(temperature_plt)
     display(energy_plt)
     display(speed_hist)
-    display(collision_plt) =#
+    display(collision_plt)
     return nothing
 end

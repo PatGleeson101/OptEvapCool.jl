@@ -1,12 +1,6 @@
-#= Simulation initialisation:
-- Particle distribution
-- Potential / Acceleration
+# Simulation initialisation
 
-Atoms are represented by two (3 x N) arrays: one containing
-position components, and the other velocity components.
-=#
-
-using Distributions
+using Distributions: Exponential, Bernoulli
 
 const kB = 1.38064852e-23 #Boltzmann constant
 

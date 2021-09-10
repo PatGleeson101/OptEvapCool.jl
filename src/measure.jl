@@ -1,5 +1,4 @@
 # Performing and plotting measurements during the simulation
-
 using Statistics: mean
 
 # Assumes the constant 'kB' is defined.

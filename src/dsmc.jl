@@ -3,7 +3,7 @@ using StatsBase: samplepair, percentile
 using LinearAlgebra: norm
 using Random: MersenneTwister
 using Printf: @sprintf
-using ProgressMeter: Progress, update!
+using ProgressMeter: Progress, update!, finish!
 using Dates: now
 
 # Storage of essential atom cloud data
@@ -237,7 +237,7 @@ function collision_step!(cloud, dt, σ, F, rng=MersenneTwister())
     min_coll_time = dt / (2 * max_colls_per_atom)
     # If peak collisions per atom is zero, then dt is Infinity, and the
     # timestep will be limited by the other constraints (motion/trapping)
-    dt = min_coll_time
+    dt = 0.5 * min_coll_time
 
     return dt, tot_cand, tot_coll
 end
@@ -289,8 +289,9 @@ end
 null_measure(_...) = nothing
 
 # Evolve initial particle population for desired duration
-function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc = 1,
-                measure = null_measure, rng=MersenneTwister())
+function evolve(positions, velocities, accel, duration, σ, ω_max, m;
+                F = 1, Nc = 1, measure = null_measure, dt_modifier = 1,
+                rng=MersenneTwister())
     # Note: Nc is the target for average # atoms per cell.
     # Initialise cloud
     cloud = AtomCloud(positions, velocities, F)
@@ -298,11 +299,10 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
     # Initial peak density (1e-5 limits max cell width)
     peak_density, _ = assign_cells!(cloud, 1e-5, Nc)
     # Proportionality constant relating timestep with max. acceleration
-    motion_limit = 0.01
+    motion_limit = 0.00005
     # Maximum timestep based on trap frequency
-    trap_dt = 0.1 * 2π / ω_max
-    dt = trap_dt # Initial timestep
-    dt = 1e-4
+    trap_dt = 0.05 * 2π / ω_max
+    dt = dt_modifier * trap_dt # Initial timestep
 
     # Track progress
     prog_detail = 10000
@@ -331,19 +331,16 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
 
         # Increment time and then update timestep
         t += dt
-        dt = min(coll_dt, trap_dt, motion_dt)
-        dt = 1e-4
+        dt = dt_modifier * min(coll_dt, trap_dt, motion_dt)
 
         # External measurements on system after one full iteration
-        #=
+        Nt = cloud.Nt
         measure(view(cloud.positions, :, 1:Nt), view(cloud.velocities, :, 1:Nt),
                 cand_count, coll_count, t)
-        =#
 
         #Update progress
         if (mod(iter_count, 100) == 0) || (t >= duration)
-            update!(progress, ceil(Int64, prog_detail * t / duration),
-                showvalues = [
+            progressvalues = [
                 ("Virtual time", @sprintf("%.3g / %.3g s", t, duration)),
                 ("Real time", now() - start_time),
                 ("Iterations", iter_count),
@@ -354,7 +351,13 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m, F = 1, Nc
                 ("Grid shape", @sprintf("%i x %i x %i", gridshape...)),
                 ("Non-empty cell count", cloud.nonempty_count),
                 ("Peak density", peak_density)
-                ])
+            ]
+            if t >= duration
+                finish!(progress, showvalues = progressvalues)
+            else
+                update!(progress, ceil(Int64, prog_detail * t / duration),
+                        showvalues = progressvalues)
+            end
         end
 
         iter_count += 1
