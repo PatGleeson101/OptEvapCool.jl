@@ -13,7 +13,7 @@ function test(seed)
     test(rng=MersenneTwister(seed))
 end
 
-function test(Np, duration, F, Nc, rng=MersenneTwister())
+function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
     # Np: initial number
     # duration: vitrual simulation time (s)
     # F: number of real particles per test particle
@@ -31,7 +31,6 @@ function test(Np, duration, F, Nc, rng=MersenneTwister())
     m = 1.44e-25 # Atomic mass (kg)
     a_sc = 1e-8 # s-wave scattering length
     σ = 8 * pi * a_sc^2 # Total collision cross section
-    # T0 = 1e-6 # Approximate initial temperature (K)
     ω_x = 2π * 150; # Trapping frequencies
     ω_y = 2π * 150;
     ω_z = 2π * 15;
@@ -41,7 +40,11 @@ function test(Np, duration, F, Nc, rng=MersenneTwister())
     Nt = ceil(Int64, Np / F) # Initial number
 
     # Cube initialisation (at T = approx. 1 microkelvin)
-    positions, velocities = uniform_cube_cloud(Nt, 1e-5, 0.01)
+    #positions, velocities = uniform_cube_cloud(Nt, 1e-5, 0.01)
+
+    T0 = 1e-7 # Approximate initial temperature (K)
+    positions = harmonic_boltzmann_positions(Nt, m, T0, ω_x, ω_y, ω_z)
+    velocities = boltzmann_velocities(Nt, m, T0)
 
     # Initial average energy per particle
     E_initial = (avg_kinetic_energy(velocities, m)
@@ -51,9 +54,14 @@ function test(Np, duration, F, Nc, rng=MersenneTwister())
     measure = record(time_series, ke_series, pe_series,
                      cand_counts, coll_counts, m, potential)
 
+    # Trap depth
+    trap_depth = (t) -> 1e-27 #(J)
+    #trap_depth = exponential_ramp(, 10)
+
     # Run evolution
     final_pos, final_vel = evolve(positions, velocities, accel, duration, σ,
-        ω_x, m, F = F, Nc = Nc, measure = measure, rng = rng)
+        ω_x, m, F = F, Nc = Nc, measure = measure,
+        rng = rng, dt_modifier = dt_modifier)
     
     # PLOTTING + ANALYSIS
     # Set up rolling window
@@ -139,20 +147,30 @@ function test(Np, duration, F, Nc, rng=MersenneTwister())
     # Theoretical mean density and speed
     nbar = Np * ω_x * ω_y * ω_z * (m / (4π * kB * T_theory))^1.5
     vbar = sqrt(8 * kB * T_theory / (π * m))
-    σ = 8π * a_sc^2
     rate_theory = 1 / sqrt(2) * Np * nbar * σ * vbar
 
-    collision_plt = plot(rolling_time,
+    #=
+    collision_plt = plot(rolling_time, F * rolling_coll_rate,
+        linecolor = linecolors[3],
+        title="Total collision rate (Final: $(@sprintf("%.3g", rate_final))/s)",
+        xlabel="Time (s)",
+        ylabel=L"\textrm{Rate\:\:}(s^{-1})", label = "Collisions (real)")
+    plot!(time_series, F * instant_coll_rate, linecolor = linecolors[3],
+            linealpha = 0.5, label = false)
+    =#
+    
+    collision_plt = plot(rolling_time, 
         [rolling_cand_rate,
          rolling_coll_rate,
          F * rolling_coll_rate],
         label=hcat("Candidates (test)",
-                   "Collisions (test)",
-                   "Collisions (real)"),
+             "Collisions (test)",
+             "Collisions (real)"),
         title="Total collision rate (Final: $(@sprintf("%.3g", rate_final))/s)",
         xlabel="Time (s)",
         ylabel=L"\textrm{Rate\:\:}(s^{-1})",
-        yaxis = :log,
+        yscale = :log10,
+        yminorticks = 10,
         linecolor=linecolors)
     ylims!(ylims(collision_plt)) # Fix limits so instantaneous rates don't dominate
     plot!(time_series,
@@ -162,11 +180,13 @@ function test(Np, duration, F, Nc, rng=MersenneTwister())
         label=false,
         linecolor=linecolors,
         linealpha=0.5)
+    
     hline!([rate_theory], linestyle=:dash, label="Theory (real)")
 
     display(temperature_plt)
     display(energy_plt)
     display(speed_hist)
     display(collision_plt)
-    return nothing
+
+    return temperature_plt, energy_plt, speed_hist, collision_plt
 end

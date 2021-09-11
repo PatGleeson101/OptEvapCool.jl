@@ -1,6 +1,7 @@
 # Simulation initialisation
 
 using Distributions: Exponential, Bernoulli
+using Random: rand!
 
 const kB = 1.38064852e-23 #Boltzmann constant
 
@@ -26,12 +27,12 @@ function boltzmann_velocities(N, m, T)
     return velocities
 end
 
-function harmonic_boltzmann_positions(N, m, ωx, ωy, ωz)
+function harmonic_boltzmann_positions(N, m, T, ωx, ωy, ωz)
     beta_x, beta_y, beta_z = 2*kB*T/m ./ [ωx^2, ωy^2, ωz^2] # scale parameter
     distances = zeros(Float64, 3, N) # SQUARED distances
-    rand!( Exponential(beta_x), @view square_distances[1, :])
-    rand!( Exponential(beta_y), @view square_distances[2, :])
-    rand!( Exponential(beta_z), @view square_distances[3, :])
+    rand!( Exponential(beta_x), @view distances[1, :])
+    rand!( Exponential(beta_y), @view distances[2, :])
+    rand!( Exponential(beta_z), @view distances[3, :])
     distances .= sqrt.( distances )
     negate = rand( Bernoulli(0.5), 3, N) .* 2 .- 1
     positions = (distances .*= negate)

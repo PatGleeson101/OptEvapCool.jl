@@ -332,9 +332,11 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m;
         coll_dt, cand_count, coll_count = collision_step!(cloud, dt, σ, rng)
 
         # Nt = atom_loss_step!(cloud, m, dt)
+        #=
         if cloud.Nt < size(cloud.positions, 2) / 2
             duplicate!(cloud)
         end
+        =#
 
         # Increment time and then update timestep
         t += dt
