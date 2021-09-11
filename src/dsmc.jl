@@ -170,42 +170,44 @@ function assign_cells!(cloud, peak_free_path, Nc)
 end
 
 # Simulate collisions
-function collision_step!(cloud, dt, σ, F, rng=MersenneTwister())
+function collision_step!(cloud, dt, σ, rng=MersenneTwister())
     cellcount = cloud.nonempty_count
     Ncs = cloud.cell_occupancies
     offsets = cloud.cell_offsets
     velocities = cloud.velocities
     atom_lookup = cloud.atom_lookup
+    F = cloud.F
 
     # Check appropriate number of pairs in each cell
     #Mcoll = zeros(Int64, cellcount)
     Vc = prod(cloud.cellsize) # Cell volume
     max_colls_per_atom = 0
     tot_cand, tot_coll = 0, 0
+    colls_per_atom = zeros(Float64, cellcount)
     for cell in 1:cellcount
         Nc = Ncs[cell]
         (Nc < 2) && continue # Skip cells with 1 particle
         offset = offsets[cell]
         # Compute maximum speed
-        max_speed = 0
-        for i in offset : offset + Nc - 1
-            atom = atom_lookup[i]
-            vx = velocities[1, atom]
-            vy = velocities[2, atom]
-            vz = velocities[3, atom]
-            max_speed = max(max_speed, sqrt(vx^2 + vy^2 + vz^2))
+        speeds = zeros(Float64, Nc)
+        for i in 1 : Nc
+            atom = atom_lookup[i + offset - 1]
+            speeds[i] = norm(view(velocities, :, atom))
         end
+        max_speed = maximum(speeds)
         # Select appropriate number of pairs
         Mraw = F * (dt * σ / Vc) * Nc * (Nc - 1) * max_speed
+        # Note: no explicit division by two in computing Mraw, because
+        # |v_rel|max = 2 * max_speed, so it cancels out.
         Mcand = ceil(Int64, Mraw)
         Mcoll = 0
         prob_adjust = Mraw / Mcand # Adjustment for rounding
-        prob_coeff = prob_adjust / max_speed
+        prob_coeff = prob_adjust / (2 * max_speed)
         # Check and perform collisions
         for _ in 1:Mcand
-            i1, i2 = samplepair(rng, Nc) .+ (offset - 1)
-            atom1 = atom_lookup[i1]
-            atom2 = atom_lookup[i2]
+            i1, i2 = samplepair(rng, Nc)
+            atom1 = atom_lookup[i1 + offset - 1]
+            atom2 = atom_lookup[i2 + offset - 1]
             # Get current velocities
             u1 = view(velocities, :, atom1)
             u2 = view(velocities, :, atom2)
@@ -223,21 +225,26 @@ function collision_step!(cloud, dt, σ, F, rng=MersenneTwister())
                 velocities[:, atom1] = v1;
                 velocities[:, atom2] = v2;
                 # Update cell's collision count and maximum speed
-                max_speed = max(max_speed, norm(v1), norm(v2))
-                prob_coeff = prob_adjust / max_speed
+                speeds[i1] = norm(v1)
+                speeds[i2] = norm(v2)
+                max_speed = maximum(speeds)
+                #max_speed = max(max_speed, speeds[i1], speeds[i2])
+                prob_coeff = prob_adjust / (2 * max_speed)
                 Mcoll += 1
             end
         end
-        max_colls_per_atom = max(max_colls_per_atom, Mcoll / Nc)
+        #max_colls_per_atom = max(max_colls_per_atom, Mcoll / Nc)
+        colls_per_atom[cell] = Mcoll / Nc
         tot_cand += Mcand
         tot_coll += Mcoll
     end
 
     # Calculate new maximum timestep based on collision rate
-    min_coll_time = dt / (2 * max_colls_per_atom)
+    peak_colls_per_atom = percentile(colls_per_atom, 99)
+    min_coll_time = dt / (2 * peak_colls_per_atom)
     # If peak collisions per atom is zero, then dt is Infinity, and the
     # timestep will be limited by the other constraints (motion/trapping)
-    dt = 0.5 * min_coll_time
+    dt = 0.05 * min_coll_time
 
     return dt, tot_cand, tot_coll
 end
@@ -322,7 +329,7 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m;
         peak_density, gridshape = assign_cells!(cloud, peak_free_path, Nc)
 
         # Perform collisions
-        coll_dt, cand_count, coll_count = collision_step!(cloud, dt, σ, F, rng)
+        coll_dt, cand_count, coll_count = collision_step!(cloud, dt, σ, rng)
 
         # Nt = atom_loss_step!(cloud, m, dt)
         if cloud.Nt < size(cloud.positions, 2) / 2
