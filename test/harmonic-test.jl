@@ -36,6 +36,8 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
     ω_z = 2π * 15;
     accel, potential = harmonic_field(ω_x, ω_y, ω_z)
 
+    τ_bg = 0.1
+
     # Test particles
     Nt = ceil(Int64, Np / F) # Initial number
 
@@ -55,13 +57,19 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
                      cand_counts, coll_counts, m, potential)
 
     # Trap depth
-    trap_depth = (t) -> 1e-27 #(J)
+    η = 10 #Truncation parameter
+    trap_depth = (t) -> η * kB * T0 #(J)
     #trap_depth = exponential_ramp(, 10)
 
     # Run evolution
-    final_pos, final_vel = evolve(positions, velocities, accel, duration, σ,
-        ω_x, m, F = F, Nc = Nc, measure = measure,
-        rng = rng, dt_modifier = dt_modifier)
+    final_cloud = evolve(positions, velocities, accel, duration, σ,
+        ω_x, m, trap_depth = trap_depth, F = F, Nc = Nc, measure = measure,
+        rng = rng, dt_modifier = dt_modifier, τ_bg = τ_bg)
+
+    Nt_final = final_cloud.Nt
+    F_final = final_cloud.F
+    final_pos = final_cloud.positions[:, 1:Nt_final]
+    final_vel = final_cloud.velocities[:, 1:Nt_final]
     
     # PLOTTING + ANALYSIS
     # Set up rolling window
@@ -85,7 +93,8 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
         ylabel="Temperature (K)",
         label=false,
         linealpha=0.5,
-        linecolor=linecolor)
+        linecolor=linecolor,
+        dpi = 300)
     plot!(rolling_time, rolling_temperature,
           linecolor=linecolor, label="Simulation")
     hline!([T_theory], linestyle=:dash, label="Theory")
@@ -109,13 +118,16 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
         label=false,
         ylim=(0, 1.2 * maximum(instant_e)),
         linecolor=linecolors,
-        linealpha=0.5)
+        linealpha=0.5,
+        dpi = 300)
     plot!(rolling_time, [rolling_ke, rolling_pe, rolling_e],
         label=["Kinetic" "Potential" "Total"],
         linecolor=linecolors)
+    
     hline!([E_theory E_theory / 2],
             linestyle=:dash,
             label=["Total (theory)" "Potential/Kinetic (theory)"])
+    
     
     # Cloud distribution
     final_speeds = vec(sqrt.(sum(final_vel .* final_vel, dims=1)))
@@ -129,7 +141,8 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
                          title="Speed distribution",
                          label="Simulation",
                          xlabel=L"\textrm{Speed\:\:}(ms^{-1})",
-                         ylabel="Probability density")
+                         ylabel="Probability density",
+                         dpi = 300)
     plot!(speed_domain, theoretical_speed_density, label="Theory")
 
     # TODO: position distribution #fit(Histogram, final_pos[1,:])
@@ -162,7 +175,7 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
     collision_plt = plot(rolling_time, 
         [rolling_cand_rate,
          rolling_coll_rate,
-         F * rolling_coll_rate],
+         F_final * rolling_coll_rate],
         label=hcat("Candidates (test)",
              "Collisions (test)",
              "Collisions (real)"),
@@ -171,22 +184,29 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
         ylabel=L"\textrm{Rate\:\:}(s^{-1})",
         yscale = :log10,
         yminorticks = 10,
-        linecolor=linecolors)
+        linecolor=linecolors,
+        dpi = 300)
     ylims!(ylims(collision_plt)) # Fix limits so instantaneous rates don't dominate
     plot!(time_series,
         [instant_cand_rate,
          instant_coll_rate,
-         F * instant_coll_rate],
+         F_final * instant_coll_rate],
         label=false,
         linecolor=linecolors,
         linealpha=0.5)
     
-    hline!([rate_theory], linestyle=:dash, label="Theory (real)")
+    #hline!([rate_theory], linestyle=:dash, label="Theory (real)")
 
+    #=
     display(temperature_plt)
     display(energy_plt)
     display(speed_hist)
-    display(collision_plt)
+    display(collision_plt)=#
+
+    savefig(temperature_plt, "./plots/temp.png")
+    savefig(energy_plt, "./plots/energy.png")
+    savefig(speed_hist, "./plots/speed.png")
+    savefig(collision_plt, "./plots/collision.png")
 
     return temperature_plt, energy_plt, speed_hist, collision_plt
 end
