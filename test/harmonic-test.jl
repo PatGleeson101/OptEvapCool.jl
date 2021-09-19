@@ -23,8 +23,8 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
     time_series = zeros(0)
     pe_series = zeros(0)
     ke_series = zeros(0)
-    coll_counts = zeros(0) # Collision counts
-    cand_counts = zeros(0) # Candidate counts
+    coll_counts = zeros(0) # Collision counts (per atom)
+    cand_counts = zeros(0) # Candidate counts (per atom)
 
     # Simulation parameters
     # Physical particles
@@ -53,8 +53,8 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
         + avg_potential_energy(positions, potential, m, 0))
 
     # Function to make measurements on the system
-    measure = record(time_series, ke_series, pe_series,
-                     cand_counts, coll_counts, m, potential)
+    measure = record(time_series, ke_series, pe_series, cand_counts,
+                    coll_counts, m, potential)
 
     # Trap depth
     η = 10 #Truncation parameter
@@ -68,7 +68,7 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
 
     Nt_final = final_cloud.Nt
     F_final = final_cloud.F
-    final_pos = final_cloud.positions[:, 1:Nt_final]
+    #final_pos = final_cloud.positions[:, 1:Nt_final]
     final_vel = final_cloud.velocities[:, 1:Nt_final]
     
     # PLOTTING + ANALYSIS
@@ -96,8 +96,8 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
         linecolor=linecolor,
         dpi = 300)
     plot!(rolling_time, rolling_temperature,
-          linecolor=linecolor, label="Simulation")
-    hline!([T_theory], linestyle=:dash, label="Theory")
+          linecolor=linecolor, label=false)
+    #hline!([T_theory], linestyle=:dash, label="Theory")
 
     # Energy
     instant_ke = ke_series / (kB * T_theory) # KE in units of kT (final)
@@ -124,16 +124,17 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
         label=["Kinetic" "Potential" "Total"],
         linecolor=linecolors)
     
+    #=
     hline!([E_theory E_theory / 2],
             linestyle=:dash,
             label=["Total (theory)" "Potential/Kinetic (theory)"])
-    
+    =#
     
     # Cloud distribution
     final_speeds = vec(sqrt.(sum(final_vel .* final_vel, dims=1)))
     # Ideal velocity probability distribution in thermal equilibrium
-    N0 = 4π * (m / (2π * kB * T_theory))^1.5; # Normalisation constant
-    fv(v) = N0 * v^2 * exp(-0.5 * m * v^2 / (kB * T_theory)) # Ideal distribution
+    N0 = 4π * (m / (2π * kB * T_final))^1.5; # Normalisation constant ##NOTE SHIFT TO T_FINAL
+    fv(v) = N0 * v^2 * exp(-0.5 * m * v^2 / (kB * T_final)) # Ideal distribution
     speed_domain = range(0, stop=1.2 * maximum(final_speeds), length=300)
     theoretical_speed_density = fv.(speed_domain)
     # Plot ideal and actual speed distributions
@@ -149,51 +150,33 @@ function test(Np, duration, F, Nc; rng=MersenneTwister(), dt_modifier = 1)
 
     # Collision rates
     timesteps = vcat(first(time_series), diff(time_series))
-    instant_coll_rate = coll_counts ./ timesteps
-    instant_cand_rate = cand_counts ./ timesteps
+    instant_coll_rate = 2 * coll_counts ./ timesteps
+    #instant_cand_rate = cand_counts ./ timesteps
 
     rolling_timesteps = time_series[window_size:end] - time_series[1:end - window_size + 1]
-    rolling_coll_rate = rolling(sum, coll_counts, window_size) ./ rolling_timesteps
-    rolling_cand_rate = rolling(sum, cand_counts, window_size) ./ rolling_timesteps
+    rolling_coll_rate = rolling(sum, 2 * coll_counts, window_size) ./ rolling_timesteps
+    #rolling_cand_rate = rolling(sum, cand_counts, window_size) ./ rolling_timesteps
 
-    rate_final = F * last(rolling_coll_rate)
-    # Theoretical mean density and speed
+    rate_final = last(rolling_coll_rate)
+    # Theoretical mean density and speed (harmonic trap, no loss)
     nbar = Np * ω_x * ω_y * ω_z * (m / (4π * kB * T_theory))^1.5
     vbar = sqrt(8 * kB * T_theory / (π * m))
     rate_theory = 1 / sqrt(2) * Np * nbar * σ * vbar
-
-    #=
-    collision_plt = plot(rolling_time, F * rolling_coll_rate,
-        linecolor = linecolors[3],
-        title="Total collision rate (Final: $(@sprintf("%.3g", rate_final))/s)",
-        xlabel="Time (s)",
-        ylabel=L"\textrm{Rate\:\:}(s^{-1})", label = "Collisions (real)")
-    plot!(time_series, F * instant_coll_rate, linecolor = linecolors[3],
-            linealpha = 0.5, label = false)
-    =#
     
-    collision_plt = plot(rolling_time, 
-        [rolling_cand_rate,
-         rolling_coll_rate,
-         F_final * rolling_coll_rate],
-        label=hcat("Candidates (test)",
-             "Collisions (test)",
-             "Collisions (real)"),
-        title="Total collision rate (Final: $(@sprintf("%.3g", rate_final))/s)",
+    collision_plt = plot(rolling_time, rolling_coll_rate,
+        title="Average collision rate per atom (Final: $(@sprintf("%.3g", rate_final))/s)",
         xlabel="Time (s)",
-        ylabel=L"\textrm{Rate\:\:}(s^{-1})",
-        yscale = :log10,
+        ylabel="Rate (Hz)",
+        label = false,
+        yaxis = :log10,
         yminorticks = 10,
         linecolor=linecolors,
         dpi = 300)
     ylims!(ylims(collision_plt)) # Fix limits so instantaneous rates don't dominate
-    plot!(time_series,
-        [instant_cand_rate,
-         instant_coll_rate,
-         F_final * instant_coll_rate],
+    plot!(time_series, instant_coll_rate,
         label=false,
         linecolor=linecolors,
-        linealpha=0.5)
+        linealpha=0.1)
     
     #hline!([rate_theory], linestyle=:dash, label="Theory (real)")
 

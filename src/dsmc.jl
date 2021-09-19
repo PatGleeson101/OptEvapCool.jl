@@ -181,7 +181,6 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
     # Check appropriate number of pairs in each cell
     #Mcoll = zeros(Int64, cellcount)
     Vc = prod(cloud.cellsize) # Cell volume
-    max_colls_per_atom = 0
     tot_cand, tot_coll = 0, 0
     colls_per_atom = zeros(Float64, cellcount)
     for cell in 1:cellcount
@@ -240,26 +239,50 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
     end
 
     # Calculate new maximum timestep based on collision rate
-    peak_colls_per_atom = percentile(colls_per_atom, 99)
-    min_coll_time = dt / (2 * peak_colls_per_atom)
-    # If peak collisions per atom is zero, then dt is Infinity, and the
-    # timestep will be limited by the other constraints (motion/trapping)
-    dt = 0.05 * min_coll_time
+    nonzero_colls_per_atom = colls_per_atom[(!iszero).(colls_per_atom)]
+    if length(nonzero_colls_per_atom) > 2
+        peak_colls_per_atom = percentile(nonzero_colls_per_atom, 50)
+        min_coll_time = dt / (2 * peak_colls_per_atom)
+        # If peak collisions per atom is zero, then dt is Infinity, and the
+        # timestep will be limited by the other constraints (motion/trapping)
+        dt = 0.1 * min_coll_time
+    else
+        # If too few cells had collisions, place no restriction on the timestep.
+        dt = Inf
+    end
 
     return dt, tot_cand, tot_coll
 end
 
 # Atom loss effects: high-energy particles, three-body recombination &
 # background collisions.
-function atom_loss_step!(cloud, m, ε, dt)
-    # Perfect loss model
-    velocities = cloud.velocities
+function atom_loss_step!(cloud, m, ε, τ_bg, dt)
+    positions, velocities = cloud.positions, cloud.velocities
     N₀=cloud.Nt
     N = N₀
+    # Three-body recombination - compute probabilities
+    recomb_prob = zeros(Float64, N₀)
+    dV = prod(cloud.cellsize)
+    K = (1e-30) * 1e-6 # Loss rate constant (m^6 / s)
+    for cell in 1:cloud.cellcount
+        Nc = cloud.cell_occupancies[cell]
+        P = K * (cloud.F)^2 * Nc * (Nc - 1) / (dV^2) * dt
+        # Store probability for all atoms in cell
+        offset = cloud.cell_offsets[cell]
+        for i in offset : offset + Nc - 1
+            atom = cloud.atom_lookup[i]
+            recomb_prob[atom] = P
+        end
+    end
+
+    # Perform atom loss
     for i in N₀:-1:1
         vx, vy, vz = view(velocities, :, i)
         ke = 0.5 * m * (vx^2 + vy^2 + vz^2)
-        if ke > ε
+        evap_loss = (2*ke > ε) # Perfect loss model #TODO: use ke + pe, not 2*ke
+        bg_loss = ( rand() < 1 - exp(-dt/τ_bg) ) # Background collisions
+        three_body_loss = ( rand() < recomb_prob[i] )
+        if #=evap_loss || bg_loss ||=# three_body_loss
             # Remove atom by replacing it with atom from the end
             velocities[:,i] = view(velocities, :, N)
             positions[:,i] = view(positions, :, N)
@@ -297,8 +320,8 @@ null_measure(_...) = nothing
 
 # Evolve initial particle population for desired duration
 function evolve(positions, velocities, accel, duration, σ, ω_max, m;
-                F = 1, Nc = 1, measure = null_measure, dt_modifier = 1,
-                rng=MersenneTwister())
+                trap_depth = (t) -> Inf, F = 1, Nc = 1, measure = null_measure,
+                dt_modifier = 1, rng=MersenneTwister(), τ_bg = Inf)
     # Note: Nc is the target for average # atoms per cell.
     # Initialise cloud
     cloud = AtomCloud(positions, velocities, F)
@@ -331,12 +354,11 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m;
         # Perform collisions
         coll_dt, cand_count, coll_count = collision_step!(cloud, dt, σ, rng)
 
-        # Nt = atom_loss_step!(cloud, m, dt)
-        #=
+        atom_loss_step!(cloud, m, trap_depth(t), τ_bg, dt)
+        
         if cloud.Nt < size(cloud.positions, 2) / 2
             duplicate!(cloud)
         end
-        =#
 
         # Increment time and then update timestep
         t += dt
@@ -359,7 +381,9 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m;
                 ("Cell size", @sprintf("%.3g x %.3g x %.3g", cloud.cellsize...)),
                 ("Grid shape", @sprintf("%i x %i x %i", gridshape...)),
                 ("Non-empty cell count", cloud.nonempty_count),
-                ("Peak density", peak_density)
+                ("Peak density", peak_density),
+                ("Np", cloud.Nt * cloud.F),
+                ("Nt", cloud.Nt)
             ]
             if t >= duration
                 finish!(progress, showvalues = progressvalues)
@@ -373,5 +397,5 @@ function evolve(positions, velocities, accel, duration, σ, ω_max, m;
     end
 
     # Return final positions and velocities
-    return cloud.positions[:,1:cloud.Nt], cloud.velocities[:,1:cloud.Nt]
+    return cloud
 end

@@ -3,7 +3,16 @@
 using Distributions: Exponential, Bernoulli
 using Random: rand!
 
-const kB = 1.38064852e-23 #Boltzmann constant
+#Boltzmann constant
+const kB = 1.38064852e-23
+
+# Defines a neutral atom species
+struct AtomSpecies
+    m :: Float64    # Atomic mass
+    aₛ :: Float64   # Scattering length
+    σ :: Float64    # Scattering cross-section
+    α :: Float64    # Polarizability
+end
 
 """
 Initialise N atoms with position components in the range

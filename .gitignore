@@ -28,6 +28,7 @@ Manifest.toml
 
 # Images stored for the project log book
 log/
+plots/
 
 # MacOS file system management
 .DS_Store

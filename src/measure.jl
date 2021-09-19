@@ -14,16 +14,17 @@ function avg_potential_energy(positions, potential, m, t)
     return mean(potential(positions, m, t))
 end
 
-# Record time, kinetic and potential energy, and collision counts
-function record(time_series, ke_series, pe_series,
-                test_counts, coll_counts, m, potential)
+# Record time, kinetic and potential energy, and collision counts per atom
+function record(time_series, ke_series, pe_series, test_counts,
+                coll_counts, m, potential)
 
     return function(positions, velocities, tested_count, coll_count, t)
+        Nt = size(positions, 2)
         push!(time_series, t)
         push!(ke_series, avg_kinetic_energy(velocities, m))
         push!(pe_series, avg_potential_energy(positions, potential, m, t))
-        push!(test_counts, tested_count)
-        push!(coll_counts, coll_count)
+        #push!(test_counts, tested_count/Nt)
+        push!(coll_counts, coll_count/Nt)
     end
 
 end
