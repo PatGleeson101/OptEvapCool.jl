@@ -7,7 +7,7 @@ function harmonic_test(T₀, Np, duration, τ_bg = 100, K = 1e-29 * 1e-6;
                     F = 1, Nc = 1) # Optional
 
     ωx, ωy, ωz = 2π * 150,   2π * 150,   2π * 15
-    field = OptEvapCool.HarmonicField(ωx, ωy, ωz)
+    field = HarmonicField(ωx, ωy, ωz)
     Nt = ceil(Int64, Np / F)
 
     species = Rb87
@@ -28,11 +28,12 @@ function harmonic_test(T₀, Np, duration, τ_bg = 100, K = 1e-29 * 1e-6;
     =#
 
     conditions = SimulationConditions(species, F, positions, velocities,
-        field.acceleration, field.potential)
+        acceleration(field), potential(field))
 
     max_dt = 0.05 * 2π / max(ωx, ωy, ωz)
     # Run evolution
-    final_cloud = evolve(conditions, duration, Nc, max_dt, measure = measure)
+    final_cloud = evolve(conditions, duration;
+        Nc = 1, max_dt = max_dt, measure = measure)
 
     # Plotting
     temperature_plt = plot_temperature(sensor)
