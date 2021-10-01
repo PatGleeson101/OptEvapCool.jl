@@ -1,7 +1,7 @@
 name = "OptEvapCool"
 uuid = "4e692e60-ff15-4771-9c7d-e46a4f597447"
 authors = ["Patrick Gleeson <patrickgleeson101@gmail.com>"]
-version = "0.1.0"
+version = "0.2.0"
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
