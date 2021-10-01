@@ -30,9 +30,10 @@ mutable struct CloudBuffer
         # Atom buffers
         pos = copy(conditions.positions)
         vel = copy(conditions.velocities)
-        acc = zeros(pos)
-        assign = zeros(Int64, size(pos, 2))
-        atoms = zeros(assign)
+        Nt = size(pos, 2)
+        acc = zeros(Float64, 3, Nt)
+        assign = zeros(Int64, Nt)
+        atoms = zeros(Int64, Nt)
 
         # Cell buffers (overwritten on first iteration)
         offsets = zeros(Int64, 1)
@@ -45,12 +46,12 @@ mutable struct CloudBuffer
 
         # Return cloud
         return new(pos, vel, acc, assign, offsets, occupancies, atoms,
-                   Nt, F, cellcount, nonempty_count, cellsize)
+                   Nt, conditions.F, cellcount, nonempty_count, cellsize)
     end
 end
 
 # Velocty Verlet step + calculate motion-based limit on next timestep
-function verlet_step!(cloud, accel, t, dt, motion_limit)
+function verlet_step!(cloud, conditions, t, dt, motion_limit)
     Nt = cloud.Nt
     positions = view(cloud.positions, :, 1:Nt)
     velocities = view(cloud.velocities, :, 1:Nt)
@@ -62,7 +63,7 @@ function verlet_step!(cloud, accel, t, dt, motion_limit)
         positions[i] += half_dt * velocities[i]
     end
     # Acceleration halfway through timestep (modifies cloud.accels in-place)
-    accel(positions, species, t + half_dt, accels)
+    conditions.acceleration(positions, conditions.species, t + half_dt, accels)
     # Compute final velocities and positions, as well as new timestep
     min_timestep = Inf
     for atom in 1:Nt
@@ -239,7 +240,7 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
         min_coll_time = dt / (2 * peak_colls_per_atom)
         # If peak collisions per atom is zero, then dt is Infinity, and the
         # timestep will be limited by the other constraints (motion/trapping)
-        dt = 0.1 * min_coll_time
+        dt = 0.3 * min_coll_time
     else
         # If too few cells had collisions, place no restriction on the timestep.
         dt = Inf
@@ -250,7 +251,7 @@ end
 
 # Atom loss effects: high-energy particles, three-body recombination &
 # background collisions.
-function atom_loss!(cloud, conditions, dt)
+function atom_loss!(cloud, conditions, t, dt)
     τ_bg, K, evap = conditions.τ_bg, conditions.threebodyloss, conditions.evaporate
 
     positions, velocities = cloud.positions, cloud.velocities
@@ -325,7 +326,6 @@ function evolve(conditions, duration;
     # Initialise dynamic storage
     cloud = CloudBuffer(conditions)
 
-    accel = conditions.accel
     σ = conditions.species.σ
     
     # Initial values
@@ -344,7 +344,7 @@ function evolve(conditions, duration;
     start_time = now()
     while t < duration
         # Collisionless motion
-        motion_dt = verlet_step!(cloud, accel, t, dt, motion_limit)
+        motion_dt = verlet_step!(cloud, conditions, t, dt, motion_limit)
 
         # Sort atoms by cell
         peak_free_path = 1 / (4 * peak_density * σ);
@@ -353,7 +353,7 @@ function evolve(conditions, duration;
         # Perform collisions
         coll_dt, cand_count, coll_count = collision_step!(cloud, dt, σ, rng)
 
-        atom_loss!(cloud, conditions, dt)
+        atom_loss!(cloud, conditions, t, dt)
         
         if cloud.Nt < size(cloud.positions, 2) / 2
             duplicate!(cloud)
@@ -374,7 +374,8 @@ function evolve(conditions, duration;
                 ("Iterations", iter_count),
                 ("Coll. dt", @sprintf("%.3g", coll_dt)),
                 ("Motion dt", @sprintf("%.3g", motion_dt)),
-                ("Trap dt", @sprintf("%.3g", trap_dt)),
+                ("Max. dt", @sprintf("%.3g", max_dt)),
+                ("dt", @sprintf("%.3g", dt)),
                 ("Cell size", @sprintf("%.3g x %.3g x %.3g", cloud.cellsize...)),
                 ("Grid shape", @sprintf("%i x %i x %i", gridshape...)),
                 ("Non-empty cell count", cloud.nonempty_count),

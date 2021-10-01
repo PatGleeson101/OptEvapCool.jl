@@ -4,8 +4,10 @@ using Distributions: Normal
 using Random: rand!
 using LinearAlgebra: normalize, dot
 
-# Boltzmann constant (SI units)
-const kB = 1.38064852e-23
+# Constants (SI units)
+const kB = 1.38064852e-23 #Boltzmann
+const c = 3e8 # Speed of light (m/s)
+const ε₀ = 8.854e-12 # Vacuum permittivity
 
 # ATOM INITIALISATION
 
@@ -14,12 +16,16 @@ struct AtomSpecies
     m :: Float64    # Atomic mass (kg)
     aₛ :: Float64   # Scattering length (m)
     σ :: Float64    # Scattering cross-section (m^2)
-    α :: Float64    # Polarizability
-    # TODO: make α a complex number?
+    α :: Float64    # Real part of polarizability
 end
 
 # Rubidium87 #TODO: precise scattering length, cross-section & polarizability.
-const Rb87 = AtomSpecies(1.454660e-25, 1e-8, pi * 8e-16, Inf)
+
+const Rb87 = AtomSpecies(1.454660e-25, 1e-8, pi * 8e-16,
+                         6.626e-34 * 0.079416 / 10000)
+
+# Dipole trap constant
+kappa(species::AtomSpecies) = species.α / (2 * ε₀ * c)
 
 # Initialise N (test) particles with position and velocity components
 # distributed uniformly in the range [-size, size] and [-v, v], respectively.
@@ -31,7 +37,7 @@ end
 
 # Initialise Boltzmann-distributed velocities at temperature
 # T for N particles, each of mass m.
-boltzmann_velocities(N, m, T) = rand( Normal(0, sqrt(kB * T / m)), Float64, 3, N)
+boltzmann_velocities(N, m, T) = reshape(rand( Normal(0, sqrt(kB * T / m)), 3*N), 3, N)
 
 # Initialise Boltzmann-distributed positions in a harmonic trap at
 # temperature T. Generates N particles, each of mass m.
@@ -91,12 +97,42 @@ struct GaussianBeam
     end
 end
 
+# E.g. gravity
+struct UniformField
+    strength :: Function # Vector acceleration (m/s^2)
+    origin :: Function
+    UniformField(str, origin = [0,0,0]) = new( time_parametrize(str, origin)... )
+end
+
+const gravity = UniformField([0, -9.81, 0])
+
+# Acceleration (constant field)
+function acceleration(field::UniformField, positions, species, t, output)
+    # 'species' parameter required to conform to correct call signature.
+    Nt = size(positions, 2)
+    for atom in 1:Nt
+        output[:, atom] .= field.strength(t)
+    end
+    return output
+end
+
+# Potential (constant field)
+function potential(field::UniformField, positions, species, t, output)
+    # 'species' parameter required to conform to correct call signature.
+    Nt = size(positions, 2)
+    for atom in 1:Nt
+        pos = view(positions, :, atom)
+        output[atom] = - species.m * dot(field.strength(t), pos - field.origin(t)) # SLOW LINE
+    end
+    return output
+end
+
 # Overload accel/potential by generating new output array when none provided.
-acceleration(f, p, s, t) = acceleration(f, p, s, t, zeros(positions))
+acceleration(f, p, s, t) = acceleration(f, p, s, t, zeros(Float64, size(p)...))
 potential(f, p, s, t) = potential(f, p, s, t, zeros(Float64, size(p, 2)))
-# Initialise a potential or acceleration function
-potential(f) = (pos, spec, t) -> potential(f, pos, spec, t)
-acceleration(f) = (pos, spec, t) -> acceleration(f, pos, spec, t)
+# Initialise a potential or acceleration function to
+potential(f) = (args...) -> potential(f, args...) #pos, spec, t, out
+acceleration(f) = (args...) -> acceleration(f, args...)
 
 # Acceleration (harmonic field)
 function acceleration(field::HarmonicField, positions, species, t, output)
@@ -124,7 +160,7 @@ function potential(field::HarmonicField, positions, species, t, output)
 end
 
 # Convert absolute position to (z, r) coordinate in beam frame.
-function axial_frame(pos::Vector, foc::Vector, dir::Vector)
+function axial_frame(pos, foc::Vector, dir::Vector)
     displacement = pos - foc
     z = dot(displacement, dir) # Beam frame
     r = sqrt( dot(displacement, displacement) - z^2)
@@ -139,31 +175,59 @@ end
 parameters(b::GaussianBeam, t) = ( b.focus(t), b.direction(t), b.power(t),
                                    b.waist(t), b.wavelength(t) )
 
+# Waist along beam
+waist(w₀, zR, z) = w₀ * sqrt(1 + (z/zR)^2)
+
+# Rayleigh length
+rayleigh(w₀, λ) = π * w₀^2 / λ
+
+# Intensity
+intensity(P, w, r) = 2 * P / (π * w^2) * exp(-2 * r^2 / w^2) 
+
 # Acceleration (Gaussian beam)
 function acceleration(field::GaussianBeam, positions, species, t, output)
-    foc, dir, P, w, λ = parameters(field, t)
+    foc, dir, P, w₀, λ = parameters(field, t)
+    κ = kappa(species)
     N = size(positions, 2)
+
     for atom in 1:N
-        pos = positions[:,atom]
-        z, r = to_frame(pos, foc, dir)
+        pos = view(positions, :, atom)
+        z, r = axial_frame(pos, foc, dir)
 
-        az, ar = "PLACEHOLDER"
+        zR = rayleigh(w₀, λ)
+        wz = waist(w₀, zR, z) # CAN ASSUME CONSTANT
+        I = intensity(P, wz, r)
 
-        #acc = from_frame(az, ar, foc, dir)
+        # Acceleration magnitudes in cylindrical coordinates
+        az = - κ * I * (2 * w₀ * z / (zR^2 * wz^2)) * (2*r^2/(wz^2)-1)
+        ar = 4 * κ * I / wz^2
 
-        output[:, atom] = acc
+        # Accelerations in Cartesian coordinates
+        acc_z = az * dir
+        acc_r = ar * ( (pos - foc) - z * dir )
+
+        output[:, atom] = acc_z + acc_r
     end
+    return output
 end
 
 # Potential (Gaussian beam)
 function potential(field::GaussianBeam, positions, species, t, output)
+    foc, dir, P, w₀, λ = parameters(field, t)
+
     Nt = size(positions, 2)
-    m = species.m
+
+    κ = kappa(species)
     
     for atom in 1:Nt
-        x, y, z = view(positions, :, atom)
-        #TODO
-        output[atom] = "PLACEHOLDER"
+        pos = view(positions,:,atom)
+        z, r = axial_frame(pos, foc, dir) # SLOW LINE
+
+        zR = rayleigh(w₀, λ)
+        wz = waist(w₀, zR, z)
+        I = intensity(P, wz, r)
+
+        output[atom] = κ * I
     end
     return output
 end
@@ -227,8 +291,8 @@ struct SimulationConditions
     species :: AtomSpecies
 
     F :: Float64 # Initial F-scale
-    positions :: Vector{Float64} # Initial test-particle positions
-    velocities :: Vector{Float64} # Initial test-particle velocities
+    positions :: Matrix{Float64} # Initial test-particle positions
+    velocities :: Matrix{Float64} # Initial test-particle velocities
 
     acceleration :: Function # Time-parametrised, vectorised acceleration func.
     potential :: Function # Potential (also parametrised/vectorised)
@@ -242,8 +306,8 @@ struct SimulationConditions
             K = 0, evap = no_evap, τ_bg = Inf) # Optional arguments
 
         # Check that array sizes are 3 x Nt
-        num_components, Nt = size(positions)
-        size(velocities) != (num_components, Nt) && throw(DimensionMismatch(
+        num_components, Nt = size(pos)
+        size(vel) != (num_components, Nt) && throw(DimensionMismatch(
             "Velocity and position arrays must have the same size.")
         )
         (num_components != 3) && throw(ArgumentError(
