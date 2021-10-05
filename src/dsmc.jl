@@ -163,7 +163,7 @@ function assign_cells!(cloud, peak_free_path, Nc)
 
     # Compute peak density. Unlike collision rate, cell occupancies *need* to
     # be stored, so we might as well take a percentile.
-    peak_density = percentile(cell_occupancies, 95) / Vc
+    peak_density = maximum(cell_occupancies) / Vc
 
     return peak_density, gridshape
 end
@@ -331,7 +331,7 @@ function evolve(conditions, duration;
     # Initial values
     peak_density, _ = assign_cells!(cloud, 1e-5, Nc)
     dt = max_dt
-    motion_limit = 0.00005 # Relate max. timestep to max. motion
+    motion_limit = 0.001#0.00005 # Relate max. timestep to max. motion
 
     # Track progress
     prog_detail = 10000

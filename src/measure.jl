@@ -74,10 +74,10 @@ end
 # Perform measurements
 function measure(sensor::GlobalSensor, cloud, conditions, cand_count, coll_count, t)
     Nt = cloud.Nt
-    species = conditions.species
     positions = view(cloud.positions, :, 1:Nt)
     velocities = view(cloud.velocities, :, 1:Nt)
 
+    species = conditions.species
     ke = avg_kinetic_energy(velocities, species.m)
     pe = mean( conditions.potential(positions, species, t) )
 
@@ -106,31 +106,30 @@ function temperature_data(sensor, window_size)
     return final_temp, instant_temp, rolling_temp
 end
 
+# Average temperature over time
 function plot_temperature(sensor, window_time = 1e-2)
     window_size = window_time_size(sensor.time, window_time)
-    T, instant_temp, rolling_temp = temperature_data(sensor, window_size)
+    T_final, instant_temp, rolling_temp = temperature_data(sensor, window_size)
     rolling_time = rollmean(sensor.time, window_size)
 
     linecolor = RGB(0.1, 0.1, 0.7)
 
     # Plot instantaneous
     plt = plot(sensor.time, instant_temp,
-        title = "Average temperature (Final: $(@sprintf("%.3g", T)) K)",
+        title = "Average temperature (Final: $(@sprintf("%.3g", T_final)) K)",
         xlabel = "Time (s)",
         ylabel = "Temperature (K)",
         label = false,
         linealpha = 0.5,
         linecolor = linecolor,
         dpi = 300)
+    # Plot rolling
     plot!(plt, rolling_time, rolling_temp, linecolor = linecolor, label = false)
-    
-    # TODO: theory
-    # T_theory = E_initial / (3 * kB)
-    #hline!([T_theory], linestyle=:dash, label="Theory")
 
-    return plt
+    return plt, T_final
 end
 
+# Total number of atoms over time
 function plot_number(sensor)
     Nt = sensor.Nt
     Np = Nt .* sensor.F
@@ -139,10 +138,13 @@ function plot_number(sensor)
         xlabel = "Time (s)",
         ylabel = "Number",
         label = ["Test" "Real"],
+        yaxis = :log10,
+        yminorticks = 10,
         dpi = 300)
     return plt
 end
 
+# Average kinetic, potential and total energy per atom
 function plot_energy(sensor, window_time = 1e-2)
     window_size = window_time_size(sensor.time, window_time)
     rolling_time = rollmean(sensor.time, window_size)
@@ -168,7 +170,7 @@ function plot_energy(sensor, window_time = 1e-2)
         xlabel="Time (s)",
         ylabel=L"\textrm{Energy\:\:}(k_B T_f)",
         label=false,
-        ylim=(0, 1.2 * maximum(instant_e)),
+        #ylim=(0, 1.2 * maximum(instant_e)),
         linecolor=linecolors,
         linealpha=0.5,
         dpi = 300)
@@ -179,13 +181,17 @@ function plot_energy(sensor, window_time = 1e-2)
     return plt
 end
 
-# Speed distribution
-function plot_speed(cloud)
+# Get speeds
+function speeds(cloud)
     Nt = cloud.Nt
     velocities = view(cloud.velocities, :, 1:Nt)
     speeds = vec(sqrt.(sum(velocities .* velocities, dims=1)))
+    return speeds
+end
 
-    plt = density(speeds,
+# Speed distribution
+function plot_speed(cloud)
+    plt = density(speeds(cloud),
         title="Speed distribution",
         label="Simulation",
         xlabel=L"\textrm{Speed\:\:}(ms^{-1})",
@@ -195,6 +201,7 @@ function plot_speed(cloud)
     return plt
 end
 
+# Collision rate per atom
 function plot_collrate(sensor, window_time = 1e-2)
     window_size = window_time_size(sensor.time, window_time)
     # Collision rates
@@ -230,40 +237,11 @@ function plot_collrate(sensor, window_time = 1e-2)
     plot!(sensor.time, instant_collrate, label = false,
           linecolor = linecolor, linealpha = 0.5)
 
-    ylims!(ylims(plt)) # Fix limits so instantaneous rates don't dominate
+    #ylims!(ylims(plt)) # Fix limits so instantaneous rates don't dominate
     plot!(sensor.time, instant_collrate,
         label=false,
         linecolor=linecolor,
-        linealpha=0.1)
+        linealpha=0.5)
+    
+    return plt
 end
-
-# THEORY
-
-# Collision rate per atom
-function harmonic_eq_collrate(field::HarmonicField, species, Np, T, t)
-    ω_x, ω_y, ω_z = field.ωx(t), field.ωy(t), field.ωz(t)
-    n̄ = Np * ω_x * ω_y * ω_z * (species.m / (4π * kB * T))^1.5
-    v̄ = sqrt(8 * kB * T / (π * species.m))
-    #Γ = 1 / sqrt(2) * Np * n̄ * species.σ * v̄ #Total collision rate
-    Γₐ = sqrt(2) * n̄ * species.σ * v̄
-    return Γₐ
-end
-
-# Speed distribution
-function harmonic_eq_speeds(m, T, max_speed = 0.01)
-    N₀ = 4π * (m / (2π * kB * T))^1.5 # Harmonic normalisation constant
-    f(v) = N₀ * v^2 * exp(-0.5 * m * v^2 / (kB * T)) # Ideal distribution
-    speed_domain = range(0, stop=1.2 * max_speed, length=300)
-    speed_density = f.(speed_domain)
-    #plot!(speed_domain, speed_density, label="Theory")
-    return speed_domain, speed_density
-end
-
-#= TEMPERATURE theory
-    E_final = last(rolling_e) * kB * T_theory # Final energy per particle in J
-    # Theoretical final total energy/atom (units kT)
-    E_theory = E_initial / (kB * T_theory)
-    hline!([E_theory E_theory / 2],
-            linestyle=:dash,
-            label=["Total (theory)" "Potential/Kinetic (theory)"])
-    =#

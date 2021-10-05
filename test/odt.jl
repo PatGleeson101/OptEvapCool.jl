@@ -2,28 +2,37 @@ using OptEvapCool
 using StatsPlots
 
 function anu_crossbeam_test()
-    F = 1000; Nc = 4;
+    #= Expect (with final power 2W)
+        Final N: 6e6
+        Final T: 700nK - 1 uK
+        # Changing to final power 1.5 would give BEC
+    =#
 
-    P1 = exponential_ramp(15, 2, 0.8) # Watts
-    P2 = exponential_ramp(7.5, 2, 0.8)
-    # Changing to final power 1.5 would give BEC
-
-    waist = 130e-6 # Waist (m)
-
-    θ = ( 22.5 * π / 180 ) / 2
-
+    # Cloud parameters
     Np = 3e7
     T₀ = 15e-6
+    species = Rb87
 
-    duration = 0.01#1.97
+    duration = 1.97
 
-    dir1 = [0, 0, 1]
-    dir2 = [cos(2*θ), 0, sin(2*θ)]
+    F = Np / (1e4) # TEMPORARILY FIX VALUE OF Nt
+    Nc = 4
+    Nt = ceil(Int64, Np / F)
+
+    # Beam parameters
+    P₁ = exponential_ramp(15, 2, 0.8) # Watts
+    P₂ = exponential_ramp(7.5, 2, 0.8)
+
+    w₀ = 130e-6 # Beam waist (m)
+    θ = ( 22.5 * π / 180 ) / 2 # Half-angle between crossed beams
+
+    dir1 = [cos(θ), 0, sin(θ)]
+    dir2 = [cos(θ), 0, -sin(θ)]
     λ₁ = 1064e-9
     λ₂ = 1090e-9
 
-    beam1 = GaussianBeam([0,0,0], dir1, P1, waist, λ₁)
-    beam2 = GaussianBeam([0,0,0], dir2, P2, waist, λ₂)
+    beam1 = GaussianBeam([0,0,0], dir1, P₁, w₀, λ₁)
+    beam2 = GaussianBeam([0,0,0], dir2, P₂, w₀, λ₂)
 
     acc1 = acceleration(gravity)
     acc2 = acceleration(beam1)
@@ -36,42 +45,35 @@ function anu_crossbeam_test()
         return (o .= a1 + a2 + a3)
     end
 
-    pot1 = potential(gravity)
-    pot2 = potential(beam1)
-    pot3 = potential(beam2)
+    pot1 = potential(beam1)
+    pot2 = potential(beam2)
+    pot3 = potential(gravity)
 
-    function poten(p, s, t)
-        p1 = pot1(p, s, t)
-        p2 = pot2(p, s, t)
-        p3 = pot3(p, s, t)
-        return (p1 + p2 + p3)
+    function crossbeam_potential(p, s, t)
+        return pot1(p, s, t) + pot2(p, s, t)
     end
 
-    #= Expect (with final power 2W)
-        Final N: 6e6
-        Final T: 700nK - 1 uK
-    =#
+    function total_potential(p, s, t)
+        return pot3(p, s, t) + crossbeam_potential(p, s, t)
+    end
 
-    Nt = ceil(Int64, Np / F)
-
-    species = Rb87
-    m = Rb87.m
-
-    # Approximate initial trapping frequencies
+    # Trapping frequencies
+    m = species.m
     κ = kappa(species)
 
-    trap_depth(t) = 2 * P1(0) * κ / (π * waist^2)
+    Uₜ_coeff = 2 * κ / (π * w₀^2)
+    Uₜ(t) = Uₜ_coeff * (P₁(t) + P₂(t)) #Trap depth
 
-    U₀ = trap_depth(0)
+    ωx_coeff = sqrt(4 * cos(θ)^2 / (m * w₀^2))
+    ωz_coeff = sqrt(4 * sin(θ)^2 / (m * w₀^2))
+    ωy_coeff = sqrt(4 / (m * w₀^2))
 
-    zr = OptEvapCool.rayleigh(waist, (λ₁ + λ₂)/2 )
-    cosθ2, sinθ2 = cos(θ)^2, sin(θ)^2
-    ωz = sqrt(4 * U₀ / m) * sqrt(cosθ2/zr^2 + 2 * sinθ2/ waist^2)
-    ωx = sqrt(4 * U₀ / m) * sqrt(sinθ2/zr^2 + 2 * cosθ2/ waist^2)
-    ωy = sqrt(8 * U₀ / (m * waist^2))
+    ωx(t) = ωx_coeff * sqrt(Uₜ(t))
+    ωz(t) = ωz_coeff * sqrt(Uₜ(t))
+    ωy(t) = ωy_coeff * sqrt(Uₜ(t))
 
     # Cloud initialisation
-    positions = harmonic_boltzmann_positions(Nt, m, T₀, ωx, ωy, ωz)
+    positions = harmonic_boltzmann_positions(Nt, m, T₀, ωx(0), ωy(0), ωz(0))
     velocities = boltzmann_velocities(Nt, m, T₀)
 
     # Function to make measurements on the system
@@ -79,38 +81,32 @@ function anu_crossbeam_test()
     measure = measurer(sensor)
 
     # Evaporation
-    evap = energy_evap(trap_depth)
+    evap = energy_evap(Uₜ, crossbeam_potential)
 
     conditions = SimulationConditions(species, F, positions, velocities,
-        accel, poten, evap = evap)
+        accel, total_potential, evap = evap)
 
-    max_dt = 0.05 * 2π / max(ωx, ωy, ωz)
+    max_dt = 0.05 * 2π / max(ωx(0), ωy(0), ωz(0))
     # Run evolution
     final_cloud = evolve(conditions, duration;
         Nc = Nc, max_dt = max_dt, measure = measure)
 
-    # Save plots and files
-    ft = filetime()
-    dir = "./results/crossbeam-$ft"
-    mkpath(dir)
-
-
-    window_size = OptEvapCool.window_time_size(sensor.time, 1e-2)
-    T_final, _, _ = OptEvapCool.temperature_data(sensor, window_size)
     # Plotting
-    temperature_plt = plot_temperature(sensor)
+    temperature_plt, T_final = plot_temperature(sensor)
 
-    Nt = final_cloud.Nt
-    velocities = view(final_cloud.velocities, :, 1:Nt)
-    speeds = vec(sqrt.(sum(velocities .* velocities, dims=1)))
-    max_speed = maximum(speeds)
-
+    max_speed = maximum(OptEvapCool.speeds(final_cloud))
     speed_hist = plot_speed(final_cloud)
-    plot!(harmonic_eq_speeds(species.m, T_final, max_speed)...)
+    plot!(equilibrium_speeds(m, T_final, max_speed)...,
+        label = "Theory")
 
     number_plt = plot_number(sensor)
     energy_plt = plot_energy(sensor)
     collrate_plt = plot_collrate(sensor)
+
+    # Save plots and files
+    ft = filetime()
+    dir = "./results/$ft-crossbeam"
+    mkpath(dir)
 
     savefig(temperature_plt, "$dir/temp.png")
     savefig(energy_plt, "$dir/energy.png")
@@ -118,11 +114,7 @@ function anu_crossbeam_test()
     savefig(collrate_plt, "$dir/collrate.png")
     savefig(number_plt, "$dir/number.png")
 
-
-    # Save data to CSV file
     savecsv(sensor, "$dir/sensor-data.csv")
 
-    # display(plt) to display; but this is slow in VSCode.
-
-    return conditions, sensor, final_cloud, dir
+    return nothing
 end

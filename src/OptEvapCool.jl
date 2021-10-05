@@ -12,7 +12,8 @@ exponential_ramp,
 GlobalSensor, measurer, measure, # Measurement and plotting
 plot_energy, plot_temperature, plot_speed,
 plot_collrate, plot_number,
-harmonic_eq_collrate, harmonic_eq_speeds, # Theoretical predictions
+equilibrium_collrate, equilibrium_speeds, # Theoretical predictions
+harmonic_theory,
 savefig, savecsv, filetime, loadsensor, # File saving/loading
 SimulationConditions, # Setup
 evolve # Perform the simulation
@@ -20,5 +21,6 @@ evolve # Perform the simulation
 include("./conditions.jl")
 include("./measure.jl")
 include("./dsmc.jl")
+include("./theory.jl")
 
 end

@@ -4,154 +4,83 @@ using Random: MersenneTwister
 using OptEvapCool
 using StatsPlots
 
-function harmonic_none(T₀, Np, duration)
-    conditions, sensor, final_cloud, dir = harmonic_test(T₀, Np, duration, name = "no-loss")
+# Assumes constant trapping frequencies
 
+function harmonic_plots(conditions, sensor, final_cloud, dir, T₀, depth = 10000)
     species = conditions.species
 
-     # Final temperature
-    window_size = OptEvapCool.window_time_size(sensor.time, 1e-2)
-    T_final, _, _ = OptEvapCool.temperature_data(sensor, window_size)
-    # Plotting
-    temperature_plt = plot_temperature(sensor)
+    # THEORY
+    ωx, ωy, ωz = 2π * 150,   2π * 150,   2π * 15
 
-    Nt = final_cloud.Nt
-    velocities = view(final_cloud.velocities, :, 1:Nt)
-    speeds = vec(sqrt.(sum(velocities .* velocities, dims=1)))
-    max_speed = maximum(speeds)
+    depth = OptEvapCool.time_parametrize(depth)
+    duration = last(sensor.time)
+    τ_bg = 100#conditions.τ_bg
+    N₀ = size(conditions.positions, 2)
+
+    t_series, N_series, T_series, Γ_series = harmonic_theory(
+        species, ωx, ωy, ωz, T₀, N₀, depth, duration, τ_bg
+    )
+
+    # Plotting
+    temperature_plt, T_final = plot_temperature(sensor)
+    plot!(t_series, T_series, label = "Theory")
 
     speed_hist = plot_speed(final_cloud)
-    plot!(harmonic_eq_speeds(species.m, T_final, max_speed)...)
+    max_speed = maximum(OptEvapCool.speeds(final_cloud))
+    plot!(equilibrium_speeds(species.m, T_final, max_speed)...,
+        label = "Theory")
 
     number_plt = plot_number(sensor)
+    plot!(t_series, N_series, label = "Theory")
     energy_plt = plot_energy(sensor)
+    # TODO - energy theory
     collrate_plt = plot_collrate(sensor)
+    plot!(t_series, Γ_series, label = "Theory")
 
     savefig(temperature_plt, "$dir/temp.png")
     savefig(energy_plt, "$dir/energy.png")
     savefig(speed_hist, "$dir/speed.png")
     savefig(collrate_plt, "$dir/collrate.png")
     savefig(number_plt, "$dir/number.png")
+end
 
+function harmonic_none(T₀, Np, duration)
+    results = harmonic_test(T₀, Np, duration, name = "harmonic-no-loss")
+    harmonic_plots(results..., T₀)
     return nothing
 end
 
-
 function harmonic_background(T₀, Np, duration, τ_bg = 5)
-    conditions, sensor, final_cloud, dir = harmonic_test(T₀, Np, duration,
-        name = "background-loss", τ_bg = τ_bg)
-
-    species = conditions.species
-
-     # Final temperature
-    window_size = OptEvapCool.window_time_size(sensor.time, 1e-2)
-    T_final, _, _ = OptEvapCool.temperature_data(sensor, window_size)
-    # Plotting
-    temperature_plt = plot_temperature(sensor)
-
-    Nt = final_cloud.Nt
-    velocities = view(final_cloud.velocities, :, 1:Nt)
-    speeds = vec(sqrt.(sum(velocities .* velocities, dims=1)))
-    max_speed = maximum(speeds)
-
-    speed_hist = plot_speed(final_cloud)
-    plot!(harmonic_eq_speeds(species.m, T_final, max_speed)...)
-
-    number_plt = plot_number(sensor)
-    plot!(sensor.time, Np * exp.(- sensor.time ./ τ_bg), label = "Theory")
-
-    energy_plt = plot_energy(sensor)
-    collrate_plt = plot_collrate(sensor)
-
-    savefig(temperature_plt, "$dir/temp.png")
-    savefig(energy_plt, "$dir/energy.png")
-    savefig(speed_hist, "$dir/speed.png")
-    savefig(collrate_plt, "$dir/collrate.png")
-    savefig(number_plt, "$dir/number.png")
-
+    results = harmonic_test(T₀, Np, duration,
+        name = "harmonic-bg-loss", τ_bg = τ_bg)
+    harmonic_plots(results..., T₀)
     return nothing
 end
 
 function harmonic_spontaneous(T₀, Np, duration, η = 10)
+    depth = η * kB * T₀
+    results = harmonic_test(T₀, Np, duration,
+        name = "harmonic-spontaneous", depth = depth)
 
-    evap = energy_evap(η * kB * T₀)
-
-    conditions, sensor, final_cloud, dir = harmonic_test(T₀, Np, duration,
-        name = "spontaneous-evap", evap = evap)
-
-    species = conditions.species
-
-     # Final temperature
-    window_size = OptEvapCool.window_time_size(sensor.time, 1e-2)
-    T_final, _, _ = OptEvapCool.temperature_data(sensor, window_size)
-    # Plotting
-    temperature_plt = plot_temperature(sensor)
-
-    Nt = final_cloud.Nt
-    velocities = view(final_cloud.velocities, :, 1:Nt)
-    speeds = vec(sqrt.(sum(velocities .* velocities, dims=1)))
-    max_speed = maximum(speeds)
-
-    speed_hist = plot_speed(final_cloud)
-    plot!(harmonic_eq_speeds(species.m, T_final, max_speed)...)
-
-    number_plt = plot_number(sensor)
-
-    energy_plt = plot_energy(sensor)
-    collrate_plt = plot_collrate(sensor)
-
-    savefig(temperature_plt, "$dir/temp.png")
-    savefig(energy_plt, "$dir/energy.png")
-    savefig(speed_hist, "$dir/speed.png")
-    savefig(collrate_plt, "$dir/collrate.png")
-    savefig(number_plt, "$dir/number.png")
-
+    harmonic_plots(results..., T₀, depth)
     return nothing
 end
 
-function harmonic_forced(T₀, Np, duration, η = 10)
-
-    depth = exponential_ramp(start, stop, tau)
-    
-    evap = energy_evap(η * kB * T₀)
-
-    conditions, sensor, final_cloud, dir = harmonic_test(T₀, Np, duration,
-        name = "spontaneous-evap", evap = evap)
-
-    species = conditions.species
-    
-     # Final temperature
-    window_size = OptEvapCool.window_time_size(sensor.time, 1e-2)
-    T_final, _, _ = OptEvapCool.temperature_data(sensor, window_size)
-    # Plotting
-    temperature_plt = plot_temperature(sensor)
-
-    Nt = final_cloud.Nt
-    velocities = view(final_cloud.velocities, :, 1:Nt)
-    speeds = vec(sqrt.(sum(velocities .* velocities, dims=1)))
-    max_speed = maximum(speeds)
-
-    speed_hist = plot_speed(final_cloud)
-    plot!(harmonic_eq_speeds(species.m, T_final, max_speed)...)
-
-    number_plt = plot_number(sensor)
-
-    energy_plt = plot_energy(sensor)
-    collrate_plt = plot_collrate(sensor)
-
-    savefig(temperature_plt, "$dir/temp.png")
-    savefig(energy_plt, "$dir/energy.png")
-    savefig(speed_hist, "$dir/speed.png")
-    savefig(collrate_plt, "$dir/collrate.png")
-    savefig(number_plt, "$dir/number.png")
-
+function harmonic_forced(T₀, Np, duration, τ)
+    depth = exponential_ramp(start, stop, τ)
+    results = harmonic_test(T₀, Np, duration,
+        name = "harmonic-forced", depth = depth, τ_bg = 100)
+    harmonic_plots(results..., T₀, depth)
     return nothing
 end
 
 function harmonic_test(T₀, Np, duration;
-        τ_bg = Inf, K = 0, evap = no_evap, name = "test")
+        τ_bg = Inf, K = 0, depth = 10000 #= ≈Inf =#, name = "harmonic")
 
-    F = 10; Nc = 1;
+    F = 10; Nc = 4;
+
+    # TEMPORARY
+    F = Np / 10000
 
     ωx, ωy, ωz = 2π * 150,   2π * 150,   2π * 15
     field = HarmonicField(ωx, ωy, ωz)
@@ -168,17 +97,20 @@ function harmonic_test(T₀, Np, duration;
     sensor = GlobalSensor()
     measure = measurer(sensor)
 
+    poten = potential(field)
+    evap = energy_evap(depth, poten)
+
     conditions = SimulationConditions(species, F, positions, velocities,
-        acceleration(field), potential(field))
+        acceleration(field), poten, K = K, evap = evap, τ_bg = τ_bg)
 
     max_dt = 0.05 * 2π / max(ωx, ωy, ωz)
     # Run evolution
     final_cloud = evolve(conditions, duration;
         Nc = Nc, max_dt = max_dt, measure = measure)
 
-    # Save plots and files
+    # Save files
     ft = filetime()
-    dir = "./results/$name-$ft"
+    dir = "./results/$ft-$name"
     mkpath(dir)
 
     # Save data to CSV file
@@ -210,8 +142,6 @@ function harmonic_test(T₀, Np, duration;
     io = open("$dir/parameters.txt", "w");
     write(io, parameter_str)
     close(io)
-
-    # display(plt) to display; but this is slow in VSCode.
 
     return conditions, sensor, final_cloud, dir
 end

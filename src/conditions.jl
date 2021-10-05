@@ -2,7 +2,7 @@
 
 using Distributions: Normal
 using Random: rand!
-using LinearAlgebra: normalize, dot
+using LinearAlgebra: normalize, dot, norm
 
 # Constants (SI units)
 const kB = 1.38064852e-23 #Boltzmann
@@ -110,8 +110,9 @@ const gravity = UniformField([0, -9.81, 0])
 function acceleration(field::UniformField, positions, species, t, output)
     # 'species' parameter required to conform to correct call signature.
     Nt = size(positions, 2)
+    str = field.strength(t)
     for atom in 1:Nt
-        output[:, atom] .= field.strength(t)
+        output[:, atom] .= str
     end
     return output
 end
@@ -120,9 +121,11 @@ end
 function potential(field::UniformField, positions, species, t, output)
     # 'species' parameter required to conform to correct call signature.
     Nt = size(positions, 2)
+    strength = field.strength(t)
+    origin = field.origin(t)
     for atom in 1:Nt
         pos = view(positions, :, atom)
-        output[atom] = - species.m * dot(field.strength(t), pos - field.origin(t)) # SLOW LINE
+        output[atom] = - species.m * dot(strength, pos - origin)
     end
     return output
 end
@@ -159,95 +162,76 @@ function potential(field::HarmonicField, positions, species, t, output)
     return output
 end
 
-# Convert absolute position to (z, r) coordinate in beam frame.
-function axial_frame(pos, foc::Vector, dir::Vector)
-    displacement = pos - foc
-    z = dot(displacement, dir) # Beam frame
-    r = sqrt( dot(displacement, displacement) - z^2)
-    return z, r
-end
-
-# Overload axial_frame for convenience
-#axial_frame(p::Vector, b::GaussianBeam, t) = axial_frame(p, b.focus(t), b.direction(t))
-#axial_frame(x::Float64, y::Float64, z::Float64,b, t) = axial_frame([x, y, z], b, t)
-
 # Get parameters of a Gaussian beam
 parameters(b::GaussianBeam, t) = ( b.focus(t), b.direction(t), b.power(t),
                                    b.waist(t), b.wavelength(t) )
 
-# Waist along beam
-waist(w₀, zR, z) = w₀ * sqrt(1 + (z/zR)^2)
-
-# Rayleigh length
-rayleigh(w₀, λ) = π * w₀^2 / λ
-
-# Intensity
-intensity(P, w, r) = 2 * P / (π * w^2) * exp(-2 * r^2 / w^2) 
-
 # Acceleration (Gaussian beam)
 function acceleration(field::GaussianBeam, positions, species, t, output)
-    foc, dir, P, w₀, λ = parameters(field, t)
+    foc, dir, P, w₀, _ = parameters(field, t)
     κ = kappa(species)
     N = size(positions, 2)
 
-    for atom in 1:N
-        pos = view(positions, :, atom)
-        z, r = axial_frame(pos, foc, dir)
+    fx, fy, fz = foc
+    ux, uy, uz = dir
 
-        zR = rayleigh(w₀, λ)
-        wz = waist(w₀, zR, z) # CAN ASSUME CONSTANT
-        I = intensity(P, wz, r)
-
-        # Acceleration magnitudes in cylindrical coordinates
-        az = - κ * I * (2 * w₀ * z / (zR^2 * wz^2)) * (2*r^2/(wz^2)-1)
-        ar = 4 * κ * I / wz^2
-
-        # Accelerations in Cartesian coordinates
-        acc_z = az * dir
-        acc_r = ar * ( (pos - foc) - z * dir )
-
-        output[:, atom] = acc_z + acc_r
+    r²coeff = - 2 / w₀^2
+    acoeff = 8 * P * κ / (π * species.m * w₀^4)
+    Threads.@threads for atom in 1:N
+        px, py, pz = view(positions, :, atom)
+        dx = px - fx # Displacement from beam focus
+        dy = py - fy
+        dz = pz - fz
+        z = dx*ux + dy*uy + dz*uz
+        rx = dx - (z * ux)
+        ry = dy - (z * uy)
+        rz = dz - (z * uz)
+        r² = rx^2 + ry^2 + rz^2
+        a = (- acoeff * exp(r²coeff * r²))
+        output[1, atom] = a*rx
+        output[2, atom] = a*ry
+        output[3, atom] = a*rz
     end
     return output
 end
 
 # Potential (Gaussian beam)
 function potential(field::GaussianBeam, positions, species, t, output)
-    foc, dir, P, w₀, λ = parameters(field, t)
+    foc, dir, P, w₀, _ = parameters(field, t)
+
+    fx, fy, fz = foc
+    ux, uy, uz = dir
 
     Nt = size(positions, 2)
-
     κ = kappa(species)
-    
-    for atom in 1:Nt
-        pos = view(positions,:,atom)
-        z, r = axial_frame(pos, foc, dir) # SLOW LINE
-
-        zR = rayleigh(w₀, λ)
-        wz = waist(w₀, zR, z)
-        I = intensity(P, wz, r)
-
-        output[atom] = κ * I
+    r²coeff = - 2 / w₀^2
+    Ucoeff = - κ * 2 * P / (π * w₀^2)
+    Threads.@threads for atom in 1:Nt
+        px, py, pz = view(positions, :, atom)
+        dx = px - fx
+        dy = py - fy
+        dz = pz - fz
+        z = dx*ux + dy*uy + dz*uz
+        r² = (dx^2 + dy^2 + dz^2) - z^2
+        output[atom] = Ucoeff * exp(r²coeff * r²) - Ucoeff
     end
     return output
 end
-
-# Add fields
-#=
-function add_fields(fields...)
-    return function(args...)
-=#
 
 # EVAPORATION PROBABILITIES
 
 # An exponential ramp
 exponential_ramp(start, stop, τ) = (t) -> stop + (start - stop) * exp(- t / τ)
 
+# A linear ramp
+linear_ramp(start, stop, τ) = (t) -> start + (stop - start) * (t / τ)
+
 # Perfect energy-based removal
-function energy_evap(εₜ, positions, conditions, t)
-    pe = conditions.potential(positions, conditions.species, t)
+function energy_evap(εₜ, positions, velocities, conditions, potential, t)
+    pe = potential(positions, conditions.species, t)
+    #ke = 0.5 * conditions.species.m * sum(velocities .* velocities, dims = 1)
     for atom in eachindex(pe)
-        if pe[atom] > εₜ
+        if pe[atom] > 0.99 * εₜ
             pe[atom] = 1
         else
             pe[atom] = 0
@@ -258,9 +242,9 @@ function energy_evap(εₜ, positions, conditions, t)
 end
 
 # Overload for correct type signature and time-parametrisation
-function energy_evap(depth)
+function energy_evap(depth, potential)
     εₜ = time_parametrize(depth)
-    return (pos, vel, cond, t) -> energy_evap(εₜ(t), pos, cond, t)
+    return (pos, vel, cond, t) -> energy_evap(εₜ(t), pos, vel, cond, potential, t)
 end
 
 # Removal if too far from the source
