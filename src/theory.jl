@@ -5,7 +5,6 @@ function equilibrium_collrate(field::HarmonicField, species, Np, T, t)
     ω_x, ω_y, ω_z = field.ωx(t), field.ωy(t), field.ωz(t)
     n̄ = Np * ω_x * ω_y * ω_z * (species.m / (4π * kB * T))^1.5
     v̄ = sqrt(8 * kB * T / (π * species.m))
-    #Γ = 1 / sqrt(2) * Np * n̄ * species.σ * v̄ #Total collision rate
     Γₐ = sqrt(2) * n̄ * species.σ * v̄
     return Γₐ
 end
@@ -41,7 +40,7 @@ function harmonic_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duratio
     T = T₀
     i = 1
     while i <= iter_count
-        Γ =  Γcoeff * N / T # Peak collision rate
+        Γ =  Γcoeff * N / T # Peak collision rate (per atom?)
         εₜ = trap_depth(t)
         η = εₜ / (kB * T) # Truncation parameter
         Ṅₑ = - N * Γ * η * exp(-η) # Evaporation rate
@@ -56,7 +55,7 @@ function harmonic_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duratio
 
         N_series[i] = N
         T_series[i] = T
-        Γ_series[i] = Γ
+        Γ_series[i] = Γ / (2 * sqrt(2)) # Convert to AVG collrate
         t_series[i] = t
 
         N += dN
@@ -66,5 +65,9 @@ function harmonic_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duratio
         i += 1
     end
 
-    return t_series, N_series, T_series, 3*Γ_series #TODO: REMOVE FUDGE FACTOR
+    return t_series, N_series, T_series, Γ_series
+end
+
+function purdue_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duration, τ_bg, K)
+
 end

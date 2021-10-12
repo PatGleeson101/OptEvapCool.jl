@@ -8,7 +8,7 @@ harmonic_boltzmann_positions,
 GaussianBeam, HarmonicField, UniformField, # Field initialisation
 gravity, acceleration, potential,
 no_evap, energy_evap, radius_evap, # Evaporation
-exponential_ramp,
+exponential_ramp, linear_ramp,
 GlobalSensor, measurer, measure, # Measurement and plotting
 plot_energy, plot_temperature, plot_speed,
 plot_collrate, plot_number,

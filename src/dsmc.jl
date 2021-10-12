@@ -81,7 +81,7 @@ function verlet_step!(cloud, conditions, t, dt, motion_limit)
 end
 
 # Assign particles to cells
-function assign_cells!(cloud, peak_free_path, Nc)
+function assign_cells!(cloud, peak_free_path, Nc, Vprev)
     N = cloud.Nt
     positions = view(cloud.positions, :, 1:N)
 
@@ -90,7 +90,7 @@ function assign_cells!(cloud, peak_free_path, Nc)
     maxpos = maximum(positions, dims=2)
 
     # Cell dimensions
-    V = prod(maxpos - minpos)
+    V = min(Vprev, prod(maxpos - minpos)) # Volume estimate
     Vc = V * Nc / N
     ds = min(cbrt(Vc), peak_free_path) #NOTE: removed 1e-12 lower bound.
     cellsize = [ds, ds, ds]
@@ -103,15 +103,8 @@ function assign_cells!(cloud, peak_free_path, Nc)
     gridshape = ceil.(Int64, (upperpos - lowerpos) ./ cellsize)
     cellcount = prod(gridshape)
 
-    # Ensure storage buffers are large enough.
-    if cellcount > length(cloud.cell_offsets)
-        cloud.cell_offsets = zeros(Int64, cellcount * 2)
-        cloud.cell_occupancies = zeros(Int64, cellcount * 2)
-    end
-    cell_offsets = view(cloud.cell_offsets, 1:cellcount)
-    cell_occupancies = view(cloud.cell_occupancies, 1:cellcount)
-    fill!(cell_offsets, 0)
-    fill!(cell_occupancies, 0)
+    # Cell occupancies
+    occupancy_dict = Dict{Int64, Int64}()
 
     # Assign atoms to cells and count the number of atoms in each cell.
     assignments = cloud.assignments
@@ -122,17 +115,38 @@ function assign_cells!(cloud, peak_free_path, Nc)
         y = ceil(Int64, (positions[2, atom] - ly) / ds)
         z = ceil(Int64, (positions[3, atom] - lz) / ds)
         cell = x + xcount * ( (y - 1) + ycount * (z - 1) )
+        if haskey(occupancy_dict, cell)
+            occupancy_dict[cell] += 1
+        else
+            occupancy_dict[cell] = 1
+        end
         assignments[atom] = cell
-        cell_occupancies[cell] += 1
     end
 
-    # Compute storage offset for each cell.
+    cellcount = length(occupancy_dict) # ONLY NONEMPTY CELLS
+
+    # Ensure storage buffers are large enough.
+    if cellcount > length(cloud.cell_offsets)
+        cloud.cell_offsets = zeros(Int64, cellcount * 2)
+        cloud.cell_occupancies = zeros(Int64, cellcount * 2)
+    end
+    cell_offsets = view(cloud.cell_offsets, 1:cellcount)
+    cell_occupancies = view(cloud.cell_occupancies, 1:cellcount)
+    fill!(cell_offsets, 0)
+    fill!(cell_occupancies, 0)
+
+    # Map cell numbers to nonempty cell index, and
+    # compute storage offset for each cell
+    index_dict = Dict{Int64, Int64}()
+    i = 1
     offset = 1
-    for cell in 1:cellcount
-        Nc = cell_occupancies[cell]
+    for (cell, Nc) in occupancy_dict
         if Nc > 0
-            cell_offsets[cell] = offset
+            index_dict[cell] = i
+            cell_offsets[i] = offset
+            cell_occupancies[i] = Nc
             offset += Nc
+            i += 1
         end
     end
 
@@ -141,31 +155,27 @@ function assign_cells!(cloud, peak_free_path, Nc)
     atom_lookup = cloud.atom_lookup
     for atom in 1:N
         cell = assignments[atom]
-        atom_lookup[ cell_offsets[cell] ] = atom
-        cell_offsets[cell] += 1
+        cell_index = index_dict[cell]
+        atom_lookup[ cell_offsets[cell_index] ] = atom
+        cell_offsets[cell_index] += 1
     end
 
-    # Restore cell offsets and move empty cells to the end.
-    nonempty_count = 0
+    # Restore cell offsets
     for cell in 1:cellcount
         Nc = cell_occupancies[cell]
-        if Nc > 0
-            cell_offsets[cell] -= Nc
-            nonempty_count += 1
-            # Use current cell to overwrite earliest empty cell
-            cell_offsets[nonempty_count] = cell_offsets[cell]
-            cell_occupancies[nonempty_count] = cell_occupancies[cell]
-        end
+        cell_offsets[cell] -= Nc
     end
 
-    cloud.nonempty_count = nonempty_count
+    cloud.nonempty_count = cellcount
     cloud.cellcount = cellcount
 
     # Compute peak density. Unlike collision rate, cell occupancies *need* to
     # be stored, so we might as well take a percentile.
     peak_density = maximum(cell_occupancies) / Vc
 
-    return peak_density, gridshape
+    Vnew = cellcount * Vc # Total volume of non-empty cells
+
+    return peak_density, gridshape, Vnew
 end
 
 # Simulate collisions
@@ -254,9 +264,10 @@ end
 function atom_loss!(cloud, conditions, t, dt)
     τ_bg, K, evap = conditions.τ_bg, conditions.threebodyloss, conditions.evaporate
 
-    positions, velocities = cloud.positions, cloud.velocities
     N₀, F = cloud.Nt, cloud.F
     dV = prod(cloud.cellsize)
+    positions = view(cloud.positions, :, 1:N₀)
+    velocities = view(cloud.velocities, :, 1:N₀)
 
     # Evaporation survival probability for each atom
     p_survive = 1 .- evap(positions, velocities, conditions, t)
@@ -327,16 +338,19 @@ function evolve(conditions, duration;
     cloud = CloudBuffer(conditions)
 
     σ = conditions.species.σ
+    max_dt = time_parametrize(max_dt)
     
     # Initial values
-    peak_density, _ = assign_cells!(cloud, 1e-5, Nc)
-    dt = max_dt
-    motion_limit = 0.001#0.00005 # Relate max. timestep to max. motion
+    peak_density, _, V = assign_cells!(cloud, 1e-5, Nc, Inf)
+    dt = max_dt(0)
+    motion_limit = 0.1 # Relate max. timestep to max. motion
+    # ANU trap: use 0.001
+    # MACRO-FORT: use 0.1
 
     # Track progress
     prog_detail = 10000
     progress = Progress(prog_detail, dt = 1, desc = "Simulation progress: ",
-                color = :green, showspeed = false, enabled = true, barlen=50)
+                color = :green, showspeed = false, enabled = true, barlen=25)
     
     # Iterate simulation
     t = 0 # Virtual time
@@ -348,20 +362,23 @@ function evolve(conditions, duration;
 
         # Sort atoms by cell
         peak_free_path = 1 / (4 * peak_density * σ);
-        peak_density, gridshape = assign_cells!(cloud, peak_free_path, Nc)
+        peak_density, gridshape, V = assign_cells!(cloud, peak_free_path, Nc, V)
 
         # Perform collisions
         coll_dt, cand_count, coll_count = collision_step!(cloud, dt, σ, rng)
 
         atom_loss!(cloud, conditions, t, dt)
         
-        if cloud.Nt < size(cloud.positions, 2) / 2
+        if cloud.Nt == 0
+            throw("Trap empty")
+        end
+        while cloud.Nt < size(cloud.positions, 2) / 2
             duplicate!(cloud)
         end
 
         # Increment time and then update timestep
         t += dt
-        dt = min(coll_dt, max_dt, motion_dt)
+        dt = min(coll_dt, max_dt(t), motion_dt)
 
         # External measurements on system after one full iteration
         measure(cloud, conditions, cand_count, coll_count, t)
@@ -374,7 +391,7 @@ function evolve(conditions, duration;
                 ("Iterations", iter_count),
                 ("Coll. dt", @sprintf("%.3g", coll_dt)),
                 ("Motion dt", @sprintf("%.3g", motion_dt)),
-                ("Max. dt", @sprintf("%.3g", max_dt)),
+                ("Max. dt", @sprintf("%.3g", max_dt(t))),
                 ("dt", @sprintf("%.3g", dt)),
                 ("Cell size", @sprintf("%.3g x %.3g x %.3g", cloud.cellsize...)),
                 ("Grid shape", @sprintf("%i x %i x %i", gridshape...)),

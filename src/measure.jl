@@ -32,6 +32,11 @@ struct GlobalSensor
     Nt :: Vector{Int64}
     cand :: Vector{Int64} # Total
     coll :: Vector{Int64} # Total
+    #=
+    Vsim :: Vector{Float64}
+    Vtheory :: Vector{Float64}
+    n0 :: Vector{Float64} # Peak density
+    =#
 
     function GlobalSensor(args...)
         # Check that all arrays have the same length
@@ -49,7 +54,10 @@ GlobalSensor() = GlobalSensor([zeros(0) for _ in 1:7]...)
 # TODO: GridSensor
 
 # Overload measurement
-measurer(sensor::GlobalSensor) = (args...) -> measure(sensor, args...)
+function measurer(sensor::GlobalSensor, p = 0, ωx = 0, ωy = 0, ωz = 0)
+    ω_x, ω_y, ω_z = time_parametrize(ωx, ωy, ωz)
+    return (args...) -> measure(sensor, args..., p = p, ωx = ω_x, ωy = ω_y, ωz = ω_z)
+end
 
 # Save to CSV
 function savecsv(sensor::GlobalSensor, filename)
@@ -71,11 +79,42 @@ function loadsensor(filename)
     return GlobalSensor(df.time, df.ke, df.pe, df.F, df.Nt, df.cand, df.coll)
 end
 
-# Perform measurements
-function measure(sensor::GlobalSensor, cloud, conditions, cand_count, coll_count, t)
+function trapped_cloud(cloud, conditions, T, ωx, ωy, ωz, p)
     Nt = cloud.Nt
-    positions = view(cloud.positions, :, 1:Nt)
-    velocities = view(cloud.velocities, :, 1:Nt)
+    species = conditions.species
+    m = species.m
+
+    N = 0
+    positions = zeros(Float64, 3, Nt)
+    velocities = zeros(Float64, 3, Nt)
+    bound = - 2 * log(p)
+
+    σx² = kB * T / (m * ωx^2)
+    σy² = kB * T / (m * ωy^2)
+    σz² = kB * T / (m * ωz^2)
+
+    for atom in 1:Nt
+        x, y, z = view(cloud.positions, :, atom)
+        if (x^2 / σx² + y^2 / σy² + z^2 / σz²) < bound
+            N += 1
+            positions[1, N] = x
+            positions[2, N] = y
+            positions[3, N] = z
+            velocities[:, N] = view(cloud.velocities, :, atom)
+        end
+    end
+    positions = view(positions, :, 1:N)
+    velocities = view(velocities, :, 1:N)
+
+    return positions, velocities
+end
+
+# Perform measurements
+function measure(sensor::GlobalSensor, cloud, conditions, cand_count, coll_count, t;
+                 p = 0, ωx = (t) -> 0, ωy = (t) -> 0, ωz = (t) -> 0)
+    
+    T = (length(sensor.ke) > 0) ? last(sensor.time) : Inf
+    positions, velocities = trapped_cloud(cloud, conditions, T, ωx(t), ωy(t), ωz(t), p)
 
     species = conditions.species
     ke = avg_kinetic_energy(velocities, species.m)
@@ -85,7 +124,7 @@ function measure(sensor::GlobalSensor, cloud, conditions, cand_count, coll_count
     push!(sensor.ke, ke)
     push!(sensor.pe, pe)
     push!(sensor.F, cloud.F)
-    push!(sensor.Nt, Nt)
+    push!(sensor.Nt, size(positions, 2))
     push!(sensor.cand, cand_count)
     push!(sensor.coll, coll_count)
 end
@@ -120,6 +159,7 @@ function plot_temperature(sensor, window_time = 1e-2)
         xlabel = "Time (s)",
         ylabel = "Temperature (K)",
         label = false,
+        ylims = (0, Inf),
         linealpha = 0.5,
         linecolor = linecolor,
         dpi = 300)
@@ -133,13 +173,12 @@ end
 function plot_number(sensor)
     Nt = sensor.Nt
     Np = Nt .* sensor.F
-    plt = plot(sensor.time, [Nt, Np],
+    plt = plot(sensor.time, Np,
         title = "Total number of atoms",
         xlabel = "Time (s)",
         ylabel = "Number",
-        label = ["Test" "Real"],
-        yaxis = :log10,
-        yminorticks = 10,
+        label = false,
+        ylims = (0, Inf),
         dpi = 300)
     return plt
 end
@@ -170,6 +209,7 @@ function plot_energy(sensor, window_time = 1e-2)
         xlabel="Time (s)",
         ylabel=L"\textrm{Energy\:\:}(k_B T_f)",
         label=false,
+        ylims = (0, Inf),
         #ylim=(0, 1.2 * maximum(instant_e)),
         linecolor=linecolors,
         linealpha=0.5,

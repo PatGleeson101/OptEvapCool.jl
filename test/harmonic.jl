@@ -15,7 +15,7 @@ function harmonic_plots(conditions, sensor, final_cloud, dir, T₀, depth = 1000
     depth = OptEvapCool.time_parametrize(depth)
     duration = last(sensor.time)
     τ_bg = 100#conditions.τ_bg
-    N₀ = size(conditions.positions, 2)
+    N₀ = size(conditions.positions, 2) * conditions.F
 
     t_series, N_series, T_series, Γ_series = harmonic_theory(
         species, ωx, ωy, ωz, T₀, N₀, depth, duration, τ_bg
@@ -77,7 +77,7 @@ end
 function harmonic_test(T₀, Np, duration;
         τ_bg = Inf, K = 0, depth = 10000 #= ≈Inf =#, name = "harmonic")
 
-    F = 10; Nc = 4;
+    F = 10; Nc = 1;
 
     # TEMPORARY
     F = Np / 10000

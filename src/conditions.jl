@@ -187,7 +187,7 @@ function acceleration(field::GaussianBeam, positions, species, t, output)
         ry = dy - (z * uy)
         rz = dz - (z * uz)
         r² = rx^2 + ry^2 + rz^2
-        a = (- acoeff * exp(r²coeff * r²))
+        a = (-acoeff * exp(r²coeff * r²))
         output[1, atom] = a*rx
         output[2, atom] = a*ry
         output[3, atom] = a*rz
@@ -229,9 +229,9 @@ linear_ramp(start, stop, τ) = (t) -> start + (stop - start) * (t / τ)
 # Perfect energy-based removal
 function energy_evap(εₜ, positions, velocities, conditions, potential, t)
     pe = potential(positions, conditions.species, t)
-    #ke = 0.5 * conditions.species.m * sum(velocities .* velocities, dims = 1)
+    ke = 0.5 * conditions.species.m * sum(velocities .* velocities, dims = 1)
     for atom in eachindex(pe)
-        if pe[atom] > 0.99 * εₜ
+        if pe[atom] + ke[atom] > εₜ
             pe[atom] = 1
         else
             pe[atom] = 0
@@ -247,24 +247,37 @@ function energy_evap(depth, potential)
     return (pos, vel, cond, t) -> energy_evap(εₜ(t), pos, vel, cond, potential, t)
 end
 
-# Removal if too far from the source
-function radius_evap(r, positions)
+# Removal when beyond ellipsoid
+function ellipsoid_evap(ωx, ωy, ωz, T, p, species, positions)
     N = size(positions, 2)
-    prob = zeros(Float64, N)
+
+    m = species.m
+    σx² = kB * T / (m * ωx^2)
+    σy² = kB * T / (m * ωy^2)
+    σz² = kB * T / (m * ωz^2)
+
+    evap_prob = zeros(Float64, N)
+    bound = -2 * log(p) # Boundary condition
+
     for atom in 1:N
-        if hypot(view(positions, :, atom)...) > r
-            prob[atom] = 1
-        else
-            prob[atom] = 0
+        x, y, z = view(positions, :, atom)
+        if (x^2 / σx² + y^2 / σy² + z^2 / σz²) > bound
+            evap_prob[atom] = 1
         end
     end
-    return prob
+
+    #println("$N, $(sum(evap_prob))")
+
+    return evap_prob
 end
 
 # Overload for correct type signature and time-parametrisation
-function radius_evap(r)
-    rₜ = time_parametrize(r)
-    return (pos, vel, cond, t) -> radius_evap(rₜ(t), pos)
+function ellipsoid_evap(ωx, ωy, ωz, T, p)
+    ω_x, ω_y, ω_z = time_parametrize(ωx, ωy, ωz)
+    function evap(pos, vel, cond, t)
+        return ellipsoid_evap(ω_x(t), ω_y(t), ω_z(t), T, p, cond.species, pos)
+    end
+    return evap
 end
 
 # No evaporation (evap. probability 0)
