@@ -76,17 +76,24 @@ function anu_crossbeam_test()
     positions = harmonic_boltzmann_positions(Nt, m, T₀, ωx(0), ωy(0), ωz(0))
     velocities = boltzmann_velocities(Nt, m, T₀)
 
+    # Adjust vertical equilibrium position
+    g = 9.81
+    q = -4*g^2 / (ωy(0)^4 * w₀^2)
+    y0 = w₀/2 * sqrt(- q * exp(q))
+
+    positions .+= [0, -y0, 0]
+
     # Function to make measurements on the system
     sensor = GlobalSensor()
-    measure = measurer(sensor, 0.001, ωx, ωy, ωz)
+    measure = measurer(sensor, 0.01, ωx, ωy, ωz)
 
     # Evaporation
     #evap = energy_evap(Uₜ, crossbeam_potential)
     #evap = OptEvapCool.no_evap
-    evap = OptEvapCool.ellipsoid_evap(ωx(2), ωy(2), ωz(2), T₀, 1e-100)
+    evap = OptEvapCool.ellipsoid_evap(ωx(2), ωy(2), ωz(2), T₀, 1e-4)
 
     # Three-body loss
-    K = 4e-29 * 1e-12
+    K = 4.3e-29 * 1e-12
 
     conditions = SimulationConditions(species, F, positions, velocities,
         accel, total_potential, evap = evap, τ_bg = 180, K = K)
@@ -107,6 +114,8 @@ function anu_crossbeam_test()
     number_plt = plot_number(sensor)
     energy_plt = plot_energy(sensor)
     collrate_plt = plot_collrate(sensor)
+    density_plt = plot_density(sensor)
+    psd_plt = plot_psd(sensor, m)
 
     # Save plots and files
     ft = filetime()
@@ -118,6 +127,8 @@ function anu_crossbeam_test()
     savefig(speed_hist, "$dir/speed.png")
     savefig(collrate_plt, "$dir/collrate.png")
     savefig(number_plt, "$dir/number.png")
+    savefig(density_plt, "$dir/density.png")
+    savefig(psd_plt, "$dir/psd.png")
 
     savecsv(sensor, "$dir/sensor-data.csv")
 
@@ -204,7 +215,7 @@ function macro_fort()
     evap = OptEvapCool.ellipsoid_evap(ωx(0), ωy(0), ωz(0), T₀, 1e-150)
 
     # Three-body loss
-    K = 1e-29 * 1e-12
+    K = 4.3e-29 * 1e-12
 
     conditions = SimulationConditions(species, F, positions, velocities,
         accel, total_potential, evap = evap, τ_bg = 180, K = K)
@@ -225,6 +236,8 @@ function macro_fort()
     number_plt = plot_number(sensor)
     energy_plt = plot_energy(sensor)
     collrate_plt = plot_collrate(sensor)
+    density_plt = plot_density(sensor)
+    psd_plt = plot_psd(sensor, m)
 
     # Save plots and files
     ft = filetime()
@@ -236,6 +249,8 @@ function macro_fort()
     savefig(speed_hist, "$dir/speed.png")
     savefig(collrate_plt, "$dir/collrate.png")
     savefig(number_plt, "$dir/number.png")
+    savefig(density_plt, "$dir/density.png")
+    savefig(psd_plt, "$dir/psd.png")
 
     savecsv(sensor, "$dir/sensor-data.csv")
 

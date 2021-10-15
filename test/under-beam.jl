@@ -9,14 +9,14 @@ function under_beam_test()
 
     duration = 1.97
 
-    F = Np / (1e5) # TEMPORARILY FIX VALUE OF Nt
+    F = Np / (1e4) # TEMPORARILY FIX VALUE OF Nt
     Nc = 5
     Nt = ceil(Int64, Np / F)
 
     # Beam parameters
     P₁ = (t) -> 15
     P₂ = (t) -> 7.5
-    P₃ = (t) -> 15 - 5 * exp(-t / 0.8)
+    P₃ = (t) -> 100 - 90 * exp(-t / 0.8)
 
     w₀ = 130e-6 # Beam waist (m)
     θ = ( 22.5 * π / 180 ) / 2 # Half-angle between crossed beams
@@ -51,12 +51,8 @@ function under_beam_test()
     pot3 = potential(gravity)
     pot4 = potential(ghost_beam)
 
-    function crossbeam_potential(p, s, t)
-        return pot1(p, s, t) + pot2(p, s, t)
-    end
-
     function total_potential(p, s, t)
-        return pot3(p, s, t) + crossbeam_potential(p, s, t)
+        return pot3(p, s, t) + pot1(p, s, t) + pot2(p, s, t) + pot4(p, s, t)
     end
 
     # Trapping frequencies
@@ -88,12 +84,12 @@ function under_beam_test()
     evap = OptEvapCool.ellipsoid_evap(ωx(2), ωy(2), ωz(2), T₀, 1e-150)
 
     # Three-body loss
-    K = 1e-29 * 1e-12
+    K = 4e-29 * 1e-12
 
     conditions = SimulationConditions(species, F, positions, velocities,
         accel, total_potential, evap = evap, τ_bg = 180, K = K)
 
-    max_dt = 0.05 * 2π / max(ωx(0), ωy(0), ωz(0))
+    max_dt(t) = 0.05 * 2π / max(ωx(t), ωy(t), ωz(t))
     # Run evolution
     final_cloud = evolve(conditions, duration;
         Nc = Nc, max_dt = max_dt, measure = measure)
@@ -112,7 +108,7 @@ function under_beam_test()
 
     # Save plots and files
     ft = filetime()
-    dir = "./results/$ft-crossbeam"
+    dir = "./results/$ft-under-beam"
     mkpath(dir)
 
     savefig(temperature_plt, "$dir/temp.png")

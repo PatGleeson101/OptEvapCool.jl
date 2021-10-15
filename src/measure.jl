@@ -32,11 +32,8 @@ struct GlobalSensor
     Nt :: Vector{Int64}
     cand :: Vector{Int64} # Total
     coll :: Vector{Int64} # Total
-    #=
     Vsim :: Vector{Float64}
-    Vtheory :: Vector{Float64}
     n0 :: Vector{Float64} # Peak density
-    =#
 
     function GlobalSensor(args...)
         # Check that all arrays have the same length
@@ -49,14 +46,16 @@ struct GlobalSensor
 end
 
 # Blank sensor
-GlobalSensor() = GlobalSensor([zeros(0) for _ in 1:7]...)
+GlobalSensor() = GlobalSensor([zeros(0) for _ in 1:9]...)
 
 # TODO: GridSensor
 
 # Overload measurement
-function measurer(sensor::GlobalSensor, p = 0, ωx = 0, ωy = 0, ωz = 0)
+function measurer(sensor::GlobalSensor, p = 0, ωx = 0, ωy = 0, ωz = 0, centre = [0,0,0])
     ω_x, ω_y, ω_z = time_parametrize(ωx, ωy, ωz)
-    return (args...) -> measure(sensor, args..., p = p, ωx = ω_x, ωy = ω_y, ωz = ω_z)
+    centre = time_parametrize(centre)
+    return (args...) -> measure(sensor, args..., p = p,
+        ωx = ω_x, ωy = ω_y, ωz = ω_z, centre = centre)
 end
 
 # Save to CSV
@@ -68,7 +67,9 @@ function savecsv(sensor::GlobalSensor, filename)
         F = sensor.F,
         Nt = sensor.Nt,
         cand = sensor.cand,
-        coll = sensor.coll
+        coll = sensor.coll,
+        Vsim = sensor.Vsim,
+        n0 = sensor.n0
     ))
     return nothing
 end
@@ -76,10 +77,11 @@ end
 # Load from CSV
 function loadsensor(filename)
     df = CSV.read(filename, DataFrame)
-    return GlobalSensor(df.time, df.ke, df.pe, df.F, df.Nt, df.cand, df.coll)
+    return GlobalSensor(df.time, df.ke, df.pe, df.F, df.Nt,
+                        df.cand, df.coll, df.Vsim, df.n0)
 end
 
-function trapped_cloud(cloud, conditions, T, ωx, ωy, ωz, p)
+function trapped_cloud(cloud, conditions, T, ωx, ωy, ωz, p, centre)
     Nt = cloud.Nt
     species = conditions.species
     m = species.m
@@ -94,7 +96,7 @@ function trapped_cloud(cloud, conditions, T, ωx, ωy, ωz, p)
     σz² = kB * T / (m * ωz^2)
 
     for atom in 1:Nt
-        x, y, z = view(cloud.positions, :, atom)
+        x, y, z = view(cloud.positions, :, atom) .- centre
         if (x^2 / σx² + y^2 / σy² + z^2 / σz²) < bound
             N += 1
             positions[1, N] = x
@@ -110,11 +112,13 @@ function trapped_cloud(cloud, conditions, T, ωx, ωy, ωz, p)
 end
 
 # Perform measurements
-function measure(sensor::GlobalSensor, cloud, conditions, cand_count, coll_count, t;
-                 p = 0, ωx = (t) -> 0, ωy = (t) -> 0, ωz = (t) -> 0)
+function measure(sensor::GlobalSensor, cloud, conditions, cand_count, coll_count, t, n0, V;
+                 p = 0, ωx = (t) -> 0, ωy = (t) -> 0, ωz = (t) -> 0, centre = (t) -> [0,0,0])
     
     T = (length(sensor.ke) > 0) ? last(sensor.time) : Inf
-    positions, velocities = trapped_cloud(cloud, conditions, T, ωx(t), ωy(t), ωz(t), p)
+    positions, velocities = trapped_cloud(cloud, conditions, T, ωx(t), ωy(t), ωz(t), p, centre(t))
+    #positions = view(cloud.positions, :, 1:cloud.Nt)
+    #velocities = view(cloud.velocities, :, 1:cloud.Nt)
 
     species = conditions.species
     ke = avg_kinetic_energy(velocities, species.m)
@@ -127,6 +131,8 @@ function measure(sensor::GlobalSensor, cloud, conditions, cand_count, coll_count
     push!(sensor.Nt, size(positions, 2))
     push!(sensor.cand, cand_count)
     push!(sensor.coll, coll_count)
+    push!(sensor.n0, n0)
+    push!(sensor.Vsim, V)
 end
 
 # PLOTTING + ANALYSIS
@@ -209,8 +215,7 @@ function plot_energy(sensor, window_time = 1e-2)
         xlabel="Time (s)",
         ylabel=L"\textrm{Energy\:\:}(k_B T_f)",
         label=false,
-        ylims = (0, Inf),
-        #ylim=(0, 1.2 * maximum(instant_e)),
+        #ylims = (0, Inf),
         linecolor=linecolors,
         linealpha=0.5,
         dpi = 300)
@@ -249,7 +254,6 @@ function plot_collrate(sensor, window_time = 1e-2)
     
     colls_per_atom = 2 * sensor.coll ./ sensor.Nt
     instant_collrate = colls_per_atom ./ timesteps
-    # TODO: candidate rate
 
     rolling_time = rollmean(sensor.time, window_size)
 
@@ -283,5 +287,67 @@ function plot_collrate(sensor, window_time = 1e-2)
         linecolor=linecolor,
         linealpha=0.5)
     
+    return plt
+end
+
+# Density
+function plot_density(sensor, window_time = 1e-2)
+    window_size = window_time_size(sensor.time, window_time)
+    rolling_time = rollmean(sensor.time, window_size)
+
+    #T, _, _ = temperature_data(sensor, window_size)
+
+    instant_V = sensor.Vsim
+    rolling_V = rollmean(instant_V, window_size)
+
+    #V = last(rolling_V)
+    instant_n0 = sensor.n0 .* sensor.F
+    rolling_n0 = rollmean(instant_n0, window_size)
+
+    rolling_F = rollmean(sensor.F, window_size)
+    rolling_Nt = rollmean(sensor.Nt, window_size)
+
+    instant_n_avg = sensor.F .* sensor.Nt ./ instant_V
+    rolling_n_avg = rolling_F .* rolling_Nt ./ rolling_V
+
+    linecolors = hcat(RGB(0.1059, 0.6196, 0.4667),
+                      RGB(0.851, 0.373, 0))
+
+    plt = plot(sensor.time, [instant_n0, instant_n_avg],
+        title="Number density",
+        xlabel="Time (s)",
+        ylabel=L"n (# $m^{-3}$)",
+        label=false,
+        linecolor=linecolors,
+        linealpha=0.5,
+        dpi = 300)
+    plot!(rolling_time, [rolling_n0, rolling_n_avg],
+        label=["Peak" "Average"],
+        linecolor=linecolors)
+
+    return plt
+end
+
+# Phase space density (WIP)
+function plot_psd(sensor, m, window_time = 1e-2)
+    window_size = window_time_size(sensor.time, window_time)
+    rolling_time = rollmean(sensor.time, window_size)
+
+    _, _, rolling_T = temperature_data(sensor, window_size)
+    rolling_F = rollmean(sensor.F, window_size)
+    rolling_n0 = rolling_F .* rollmean(sensor.n0, window_size)
+    hbar = 6.626e-34 / (2 * π)
+    rolling_psd = rolling_n0 .* (sqrt.(2*π*hbar^2 ./ (m * kB .* rolling_T) ) .^3)
+
+    linecolor = RGB(0.1059, 0.6196, 0.4667)
+
+    plt = plot(rolling_time, rolling_psd,
+        title="Phase space density",
+        xlabel="Time (s)",
+        ylabel=L"PSD",
+        label=false,
+        linecolor=linecolor,
+        dpi = 300)
+
     return plt
 end

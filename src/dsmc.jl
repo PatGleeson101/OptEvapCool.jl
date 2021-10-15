@@ -381,7 +381,7 @@ function evolve(conditions, duration;
         dt = min(coll_dt, max_dt(t), motion_dt)
 
         # External measurements on system after one full iteration
-        measure(cloud, conditions, cand_count, coll_count, t)
+        measure(cloud, conditions, cand_count, coll_count, t, peak_density, V)
         
         #Update progress
         if (mod(iter_count, 100) == 0) || (t >= duration)
@@ -396,7 +396,7 @@ function evolve(conditions, duration;
                 ("Cell size", @sprintf("%.3g x %.3g x %.3g", cloud.cellsize...)),
                 ("Grid shape", @sprintf("%i x %i x %i", gridshape...)),
                 ("Non-empty cell count", cloud.nonempty_count),
-                ("Peak density", peak_density),
+                ("Peak density", cloud.F * peak_density),
                 ("Np", cloud.Nt * cloud.F),
                 ("Nt", cloud.Nt)
             ]

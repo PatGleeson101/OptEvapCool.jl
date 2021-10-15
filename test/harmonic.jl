@@ -77,7 +77,7 @@ end
 function harmonic_test(T₀, Np, duration;
         τ_bg = Inf, K = 0, depth = 10000 #= ≈Inf =#, name = "harmonic")
 
-    F = 10; Nc = 1;
+    F = 10; Nc = 5;
 
     # TEMPORARY
     F = Np / 10000

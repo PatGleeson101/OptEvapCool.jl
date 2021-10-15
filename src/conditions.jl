@@ -19,10 +19,8 @@ struct AtomSpecies
     α :: Float64    # Real part of polarizability
 end
 
-# Rubidium87 #TODO: precise scattering length, cross-section & polarizability.
-
-const Rb87 = AtomSpecies(1.454660e-25, 1e-8, pi * 8e-16,
-                         6.626e-34 * 0.079416 / 10000)
+const Rb87 = AtomSpecies(1.454660e-25, 5e-9, 8*pi * (5e-9)^2,
+                         1.1e-38)
 
 # Dipole trap constant
 kappa(species::AtomSpecies) = species.α / (2 * ε₀ * c)
@@ -248,7 +246,7 @@ function energy_evap(depth, potential)
 end
 
 # Removal when beyond ellipsoid
-function ellipsoid_evap(ωx, ωy, ωz, T, p, species, positions)
+function ellipsoid_evap(ωx, ωy, ωz, T, p, centre, species, positions)
     N = size(positions, 2)
 
     m = species.m
@@ -260,22 +258,21 @@ function ellipsoid_evap(ωx, ωy, ωz, T, p, species, positions)
     bound = -2 * log(p) # Boundary condition
 
     for atom in 1:N
-        x, y, z = view(positions, :, atom)
+        x, y, z = view(positions, :, atom) .- centre
         if (x^2 / σx² + y^2 / σy² + z^2 / σz²) > bound
             evap_prob[atom] = 1
         end
     end
 
-    #println("$N, $(sum(evap_prob))")
-
     return evap_prob
 end
 
 # Overload for correct type signature and time-parametrisation
-function ellipsoid_evap(ωx, ωy, ωz, T, p)
+function ellipsoid_evap(ωx, ωy, ωz, T, p, centre = [0.0,0,0])
     ω_x, ω_y, ω_z = time_parametrize(ωx, ωy, ωz)
+    centre = time_parametrize(centre)
     function evap(pos, vel, cond, t)
-        return ellipsoid_evap(ω_x(t), ω_y(t), ω_z(t), T, p, cond.species, pos)
+        return ellipsoid_evap(ω_x(t), ω_y(t), ω_z(t), T, p, centre(t), cond.species, pos)
     end
     return evap
 end

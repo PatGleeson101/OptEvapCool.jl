@@ -68,6 +68,66 @@ function harmonic_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duratio
     return t_series, N_series, T_series, Γ_series
 end
 
-function purdue_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duration, τ_bg, K)
+function purdue_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duration, τ_bg = Inf, K = 0)
+    dt = 0.0001
 
+    ωx, ωy, ωz = time_parametrize(ωx, ωy, ωz)
+    trap_depth = time_parametrize(trap_depth)
+
+    iter_count = ceil(Int64, duration / dt)
+    N_series = zeros(Float64, iter_count)
+    T_series = zeros(Float64, iter_count)
+    Γ_series = zeros(Float64, iter_count)
+    t_series = zeros(Float64, iter_count)
+
+    m = species.m
+    σ = species.σ
+
+    E₀ = 3 * N₀ * kB * T₀
+
+    Γ_bg = 1 / τ_bg
+
+    t = 0
+    N = N₀
+    E = E₀
+    T = T₀
+
+    i = 1
+    while i <= iter_count
+        n₀ = N * ωx(t) * ωy(t) * ωz(t) * (m / (2π * kB * T))^1.5 # Peak density
+        n̄ = n₀ / sqrt(8) # Mean density
+        vᵣ = sqrt(16 * kB * T / (π * m)) # Mean relative velocity
+
+        εₜ = trap_depth(t) # Trap depth
+        η = εₜ / (kB * T) # Truncation parameter
+        Γ_el = n̄ * σ * vᵣ; # Elastic collision rate per atom
+        Γ_ev = (η-4)*exp(-η) * Γ_el # Evaporation rate per atom
+        Γ_3B = K * n₀^2 / (3 * sqrt(3)) # Three-body collision rate per atom
+
+        Ṅ = - (Γ_ev + Γ_bg + Γ_3B) * N
+        Ė_ev = - N * Γ_ev * (η + (η-5)/(η-4)) * kB * T
+        Ė_bg = - Γ_bg * E
+        Ė_3B = - Γ_3B * (2/3) * E
+
+        Ė = Ė_ev + Ė_bg + Ė_3B
+
+        # Note: ignoring effects of adiabatic change in trap shape
+
+        dN = Ṅ * dt
+        dE = Ė * dt
+
+        N_series[i] = N
+        T_series[i] = T
+        Γ_series[i] = Γ_el
+        t_series[i] = t
+
+        N += dN
+        E += dE
+        T = E / (3 * N * kB)
+        t += dt
+
+        i += 1
+    end
+
+    return t_series, N_series, T_series, Γ_series
 end
