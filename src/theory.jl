@@ -20,7 +20,9 @@ end
 
 # Harmonic theory
 function harmonic_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duration, τ_bg)
-    dt = 0.0001
+    dt = 0.000001
+
+    ωx, ωy, ωz = time_parametrize(ωx, ωy, ωz)
 
     iter_count = ceil(Int64, duration / dt)
     N_series = zeros(Float64, iter_count)
@@ -33,13 +35,12 @@ function harmonic_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duratio
     m = species.m
     a = species.aₛ
 
-    Γcoeff = 8*sqrt(2)*a^2 * m / (π * kB) * ωx * ωy * ωz
-
     t = 0
     N = N₀
     T = T₀
     i = 1
     while i <= iter_count
+        Γcoeff = 8*sqrt(2)*a^2 * m / (π * kB) * ωx(t) * ωy(t) * ωz(t)
         Γ =  Γcoeff * N / T # Peak collision rate (per atom?)
         εₜ = trap_depth(t)
         η = εₜ / (kB * T) # Truncation parameter
@@ -69,7 +70,7 @@ function harmonic_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duratio
 end
 
 function purdue_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duration, τ_bg = Inf, K = 0)
-    dt = 0.0001
+    dt = 0.000001
 
     ωx, ωy, ωz = time_parametrize(ωx, ωy, ωz)
     trap_depth = time_parametrize(trap_depth)

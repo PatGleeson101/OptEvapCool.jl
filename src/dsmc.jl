@@ -92,7 +92,8 @@ function assign_cells!(cloud, peak_free_path, Nc, Vprev)
     # Cell dimensions
     V = min(Vprev, prod(maxpos - minpos)) # Volume estimate
     Vc = V * Nc / N
-    ds = min(cbrt(Vc), peak_free_path) #NOTE: removed 1e-12 lower bound.
+    ds = cbrt(Vc)
+    #ds = min(cbrt(Vc), peak_free_path)
     cellsize = [ds, ds, ds]
     cloud.cellsize = cellsize
 
@@ -169,9 +170,8 @@ function assign_cells!(cloud, peak_free_path, Nc, Vprev)
     cloud.nonempty_count = cellcount
     cloud.cellcount = cellcount
 
-    # Compute peak density. Unlike collision rate, cell occupancies *need* to
-    # be stored, so we might as well take a percentile.
-    peak_density = maximum(cell_occupancies) / Vc
+    # Compute peak density.
+    peak_density = percentile(cell_occupancies, 97) / Vc
 
     Vnew = cellcount * Vc # Total volume of non-empty cells
 
@@ -188,10 +188,8 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
     F = cloud.F
 
     # Check appropriate number of pairs in each cell
-    #Mcoll = zeros(Int64, cellcount)
     Vc = prod(cloud.cellsize) # Cell volume
     tot_cand, tot_coll = 0, 0
-    colls_per_atom = zeros(Float64, cellcount)
     for cell in 1:cellcount
         Nc = Ncs[cell]
         (Nc < 2) && continue # Skip cells with 1 particle
@@ -210,51 +208,56 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
         Mcand = ceil(Int64, Mraw)
         Mcoll = 0 # Total collisions in cell
         prob_adjust = Mraw / Mcand # Adjustment for rounding
+        Pcoll = rand(rng, Mcand)
         # Check and perform collisions
-        for _ in 1:Mcand
+        for j in 1:Mcand
             i1, i2 = samplepair(rng, Nc)
             atom1 = atom_lookup[i1 + offset - 1]
             atom2 = atom_lookup[i2 + offset - 1]
             # Get current velocities
-            u1 = view(velocities, :, atom1)
-            u2 = view(velocities, :, atom2)
-            urel = norm(u2 - u1)
-            if rand() < urel * prob_adjust / (2 * max_speed) # Collision prob.
+            u1x, u1y, u1z = view(velocities, :, atom1)
+            u2x, u2y, u2z = view(velocities, :, atom2)
+            urel = sqrt((u1x - u2x)^2 + (u1y - u2y)^2 + (u1z - u2z)^2)
+            if Pcoll[j] < urel * prob_adjust / (2 * max_speed) # Collision prob.
                 # Compute new relative velocity
                 ϕ = 2 * π * rand(rng)
                 cosθ = 2 * rand(rng) - 1
                 sinθ = sqrt(1 - cosθ^2)
-                vrel = urel .* [sinθ * cos(ϕ), sinθ * sin(ϕ), cosθ]
+                vrx = urel * sinθ * cos(ϕ)
+                vry = urel * sinθ * sin(ϕ)
+                vrz = urel * cosθ
                 # Update stored velocities
-                vcm = 0.5 * (u1 + u2)
-                v1 = vcm + 0.5 * vrel;
-                v2 = vcm - 0.5 * vrel;
-                velocities[:, atom1] = v1;
-                velocities[:, atom2] = v2;
+                vcmx = 0.5 * (u1x + u2x)
+                vcmy = 0.5 * (u1y + u2y)
+                vcmz = 0.5 * (u1z + u2z)
+                v1x = vcmx + 0.5 * vrx;
+                v1y = vcmy + 0.5 * vry;
+                v1z = vcmz + 0.5 * vrz;
+                v2x = vcmx - 0.5 * vrx;
+                v2y = vcmy - 0.5 * vry;
+                v2z = vcmz - 0.5 * vrz;
+                velocities[1, atom1] = v1x
+                velocities[2, atom1] = v1y
+                velocities[3, atom1] = v1z
+                velocities[1, atom2] = v2x
+                velocities[2, atom2] = v2y
+                velocities[3, atom2] = v2z
                 # Update cell's collision count and maximum speed
-                speeds[i1] = norm(v1)
-                speeds[i2] = norm(v2)
-                max_speed = maximum(speeds)
+                speed1 = sqrt(v1x^2+ v1y^2+v1z^2)
+                speed2 = sqrt(v2x^2+ v2y^2+ v2z^2)
+                speeds[i1] = speed1
+                speeds[i2] = speed2
+                max_speed = maximum(speeds)#max(max_speed, speed1, speed2)
                 Mcoll += 1
             end
         end
-        colls_per_atom[cell] = Mcoll / Nc
         tot_cand += Mcand
         tot_coll += Mcoll
     end
 
-    # Calculate new maximum timestep based on collision rate
-    nonzero_colls_per_atom = colls_per_atom[(!iszero).(colls_per_atom)]
-    if length(nonzero_colls_per_atom) > 2
-        peak_colls_per_atom = percentile(nonzero_colls_per_atom, 50)
-        min_coll_time = dt / (2 * peak_colls_per_atom)
-        # If peak collisions per atom is zero, then dt is Infinity, and the
-        # timestep will be limited by the other constraints (motion/trapping)
-        dt = 0.3 * min_coll_time
-    else
-        # If too few cells had collisions, place no restriction on the timestep.
-        dt = Inf
-    end
+    # Calculate collision-based timestep limit
+    Γₐ = 2 * tot_coll / (cloud.Nt * dt) # Mean collision rate per atom
+    dt = 30/Γₐ
 
     return dt, tot_cand, tot_coll
 end
@@ -307,10 +310,12 @@ function duplicate!(cloud)
     positions = view(cloud.positions, :, 1:N₀)
     velocities = view(cloud.velocities, :, 1:N₀)
     if N₁ > size(cloud.positions, 2) # Buffer requires resizing
+        @warn "Cloud duplication triggered above half capacity."
         cloud.positions = hcat(positions, positions)
         cloud.positions = hcat(velocities, velocities)
         # NOTE: switched from reflected velocities to identical velocities.
-        cloud.accels = hcat(accels, accels) # or: zeros(Float64, 3, N₁)
+        accels = view(cloud.accels, :, 1:N₀)
+        cloud.accels = hcat(accels, accels)
     else # No resize required
         cloud.positions[:, N₀+1 : N₁] .= positions
         cloud.velocities[:, N₀+1 : N₁] .= velocities
@@ -343,9 +348,8 @@ function evolve(conditions, duration;
     # Initial values
     peak_density, _, V = assign_cells!(cloud, 1e-5, Nc, Inf)
     dt = max_dt(0)
-    motion_limit = 0.1 # Relate max. timestep to max. motion
+    motion_limit = 0.01 # Relate max. timestep to max. motion
     # ANU trap: use 0.001
-    # MACRO-FORT: use 0.1
 
     # Track progress
     prog_detail = 10000
@@ -370,8 +374,10 @@ function evolve(conditions, duration;
         atom_loss!(cloud, conditions, t, dt)
         
         if cloud.Nt == 0
-            throw("Trap empty")
+            @warn "Trap empty"
+            return cloud
         end
+
         while cloud.Nt < size(cloud.positions, 2) / 2
             duplicate!(cloud)
         end

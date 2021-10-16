@@ -115,7 +115,7 @@ end
 function measure(sensor::GlobalSensor, cloud, conditions, cand_count, coll_count, t, n0, V;
                  p = 0, ωx = (t) -> 0, ωy = (t) -> 0, ωz = (t) -> 0, centre = (t) -> [0,0,0])
     
-    T = (length(sensor.ke) > 0) ? last(sensor.time) : Inf
+    T = (length(sensor.ke) > 0) ? 2 * last(sensor.ke) / (3 * kB) : Inf
     positions, velocities = trapped_cloud(cloud, conditions, T, ωx(t), ωy(t), ωz(t), p, centre(t))
     #positions = view(cloud.positions, :, 1:cloud.Nt)
     #velocities = view(cloud.velocities, :, 1:cloud.Nt)
@@ -280,12 +280,6 @@ function plot_collrate(sensor, window_time = 1e-2)
         dpi = 300)
     plot!(sensor.time, instant_collrate, label = false,
           linecolor = linecolor, linealpha = 0.5)
-
-    #ylims!(ylims(plt)) # Fix limits so instantaneous rates don't dominate
-    plot!(sensor.time, instant_collrate,
-        label=false,
-        linecolor=linecolor,
-        linealpha=0.5)
     
     return plt
 end

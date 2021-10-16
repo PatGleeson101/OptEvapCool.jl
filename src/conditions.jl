@@ -8,6 +8,9 @@ using LinearAlgebra: normalize, dot, norm
 const kB = 1.38064852e-23 #Boltzmann
 const c = 3e8 # Speed of light (m/s)
 const ε₀ = 8.854e-12 # Vacuum permittivity
+const h̄ = 6.626e-34 / (2 * π) # Reduced Planck
+const g = 9.81 # Gravity
+const a₀ = 5.28e-9 # Bohr radius
 
 # ATOM INITIALISATION
 
@@ -19,7 +22,7 @@ struct AtomSpecies
     α :: Float64    # Real part of polarizability
 end
 
-const Rb87 = AtomSpecies(1.454660e-25, 5e-9, 8*pi * (5e-9)^2,
+const Rb87 = AtomSpecies(1.454660e-25, 98a₀, 8*pi * ( 98a₀ )^2,
                          1.1e-38)
 
 # Dipole trap constant
@@ -76,8 +79,11 @@ struct HarmonicField
     ωx :: Function
     ωy :: Function
     ωz :: Function
+    centre :: Function
     # Initialise
-    HarmonicField(ωx, ωy, ωz) = new( time_parametrize(ωx, ωy, ωz)... )
+    HarmonicField(ωx, ωy, ωz, centre = [0.0,0,0]) = (
+        new( time_parametrize(ωx, ωy, ωz, centre)... )
+    )
 end
 
 # Gaussian beam (time-dependent)
@@ -102,7 +108,7 @@ struct UniformField
     UniformField(str, origin = [0,0,0]) = new( time_parametrize(str, origin)... )
 end
 
-const gravity = UniformField([0, -9.81, 0])
+const gravity = UniformField([0, -g, 0])
 
 # Acceleration (constant field)
 function acceleration(field::UniformField, positions, species, t, output)
@@ -139,11 +145,12 @@ acceleration(f) = (args...) -> acceleration(f, args...)
 function acceleration(field::HarmonicField, positions, species, t, output)
     # 'species' parameter required to conform to correct call signature.
     Nt = size(positions, 2)
+    cx, cy, cz = field.centre(t)
     ωx2, ωy2, ωz2 = field.ωx(t)^2, field.ωy(t)^2, field.ωz(t)^2
-    for atom in 1:Nt
-        output[1, atom] = - ωx2 * positions[1, atom]
-        output[2, atom] = - ωy2 * positions[2, atom]
-        output[3, atom] = - ωz2 * positions[3, atom]
+    Threads.@threads for atom in 1:Nt
+        output[1, atom] = - ωx2 * (positions[1, atom] - cx)
+        output[2, atom] = - ωy2 * (positions[2, atom] - cy)
+        output[3, atom] = - ωz2 * (positions[3, atom] - cz)
     end
     return output
 end
@@ -152,9 +159,10 @@ end
 function potential(field::HarmonicField, positions, species, t, output)
     Nt = size(positions, 2)
     m = species.m
+    centre = field.centre(t)
     ωx2, ωy2, ωz2 = field.ωx(t)^2, field.ωy(t)^2, field.ωz(t)^2
-    for atom in 1:Nt
-        x, y, z = view(positions, :, atom)
+    Threads.@threads for atom in 1:Nt
+        x, y, z = view(positions, :, atom) .- centre
         output[atom] = 0.5 * m * (ωx2 * x^2 + ωy2 * y^2 + ωz2 * z^2)
     end
     return output
@@ -180,8 +188,8 @@ function acceleration(field::GaussianBeam, positions, species, t, output)
         dx = px - fx # Displacement from beam focus
         dy = py - fy
         dz = pz - fz
-        z = dx*ux + dy*uy + dz*uz
-        rx = dx - (z * ux)
+        z = dx*ux + dy*uy + dz*uz # Axial coordinate
+        rx = dx - (z * ux) # Radial vector
         ry = dy - (z * uy)
         rz = dz - (z * uz)
         r² = rx^2 + ry^2 + rz^2
@@ -269,10 +277,10 @@ end
 
 # Overload for correct type signature and time-parametrisation
 function ellipsoid_evap(ωx, ωy, ωz, T, p, centre = [0.0,0,0])
-    ω_x, ω_y, ω_z = time_parametrize(ωx, ωy, ωz)
+    ω_x, ω_y, ω_z, T = time_parametrize(ωx, ωy, ωz, T)
     centre = time_parametrize(centre)
     function evap(pos, vel, cond, t)
-        return ellipsoid_evap(ω_x(t), ω_y(t), ω_z(t), T, p, centre(t), cond.species, pos)
+        return ellipsoid_evap(ω_x(t), ω_y(t), ω_z(t), T(t), p, centre(t), cond.species, pos)
     end
     return evap
 end

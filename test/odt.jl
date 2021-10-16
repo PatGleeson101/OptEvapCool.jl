@@ -20,8 +20,11 @@ function anu_crossbeam_test()
     Nt = ceil(Int64, Np / F)
 
     # Beam parameters
-    P₁ = exponential_ramp(15, 2, 0.8) # Watts
-    P₂ = exponential_ramp(7.5, 2, 0.8)
+    P₁ = exponential_ramp(15, 1.0, 0.8) # Watts
+    P₂ = exponential_ramp(7.5, 1.5, 0.8)
+
+    println(P₁(2))
+    println(P₂(2))
 
     w₀ = 130e-6 # Beam waist (m)
     θ = ( 22.5 * π / 180 ) / 2 # Half-angle between crossed beams
@@ -212,7 +215,7 @@ function macro_fort()
     measure = measurer(sensor, 0.001, ωx, ωy, ωz)
 
     # Evaporation
-    evap = OptEvapCool.ellipsoid_evap(ωx(0), ωy(0), ωz(0), T₀, 1e-150)
+    evap = OptEvapCool.ellipsoid_evap(ωx(0), ωy(0), ωz(0), T₀, 1e-4)
 
     # Three-body loss
     K = 4.3e-29 * 1e-12
@@ -220,7 +223,7 @@ function macro_fort()
     conditions = SimulationConditions(species, F, positions, velocities,
         accel, total_potential, evap = evap, τ_bg = 180, K = K)
 
-    max_dt = 0.05 * 2π / max(ωx(0), ωy(0), ωz(0))
+    max_dt(t) = 0.05 * 2π / max(ωx(t), ωy(t), ωz(t))
     # Run evolution
     final_cloud = evolve(conditions, duration;
         Nc = Nc, max_dt = max_dt, measure = measure)

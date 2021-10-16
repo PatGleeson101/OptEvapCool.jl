@@ -25,6 +25,7 @@ function ghost_beam_test()
     dir_h = [0, 0, 1]
     dir_v = [0, -1, 0]
     dir_g = [0, -1, 0]
+    
     λ = 1064e-9
 
     foc_g = (t) -> [85e-6, 0, 0] + (t/0.24) * [-30e-6, 0, 0]
