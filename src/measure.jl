@@ -82,29 +82,7 @@ function loadsensor(filename)
 end
 
 function trapped_cloud(cloud, conditions, T, ωx, ωy, ωz, p, centre)
-    Nt = cloud.Nt
-    species = conditions.species
-    m = species.m
-
-    N = 0
-    positions = zeros(Float64, 3, Nt)
-    velocities = zeros(Float64, 3, Nt)
-    bound = - 2 * log(p)
-
-    σx² = kB * T / (m * ωx^2)
-    σy² = kB * T / (m * ωy^2)
-    σz² = kB * T / (m * ωz^2)
-
-    for atom in 1:Nt
-        x, y, z = view(cloud.positions, :, atom) .- centre
-        if (x^2 / σx² + y^2 / σy² + z^2 / σz²) < bound
-            N += 1
-            positions[1, N] = x
-            positions[2, N] = y
-            positions[3, N] = z
-            velocities[:, N] = view(cloud.velocities, :, atom)
-        end
-    end
+    
     positions = view(positions, :, 1:N)
     velocities = view(velocities, :, 1:N)
 
@@ -114,21 +92,48 @@ end
 # Perform measurements
 function measure(sensor::GlobalSensor, cloud, conditions, cand_count, coll_count, t, n0, V;
                  p = 0, ωx = (t) -> 0, ωy = (t) -> 0, ωz = (t) -> 0, centre = (t) -> [0,0,0])
-    
-    T = (length(sensor.ke) > 0) ? 2 * last(sensor.ke) / (3 * kB) : Inf
-    positions, velocities = trapped_cloud(cloud, conditions, T, ωx(t), ωy(t), ωz(t), p, centre(t))
-    #positions = view(cloud.positions, :, 1:cloud.Nt)
-    #velocities = view(cloud.velocities, :, 1:cloud.Nt)
+
+    Nt = cloud.Nt
+    positions = view(cloud.positions, :, 1:Nt)
+    velocities = view(cloud.velocities, :, 1:Nt)
 
     species = conditions.species
-    ke = avg_kinetic_energy(velocities, species.m)
-    pe = mean( conditions.potential(positions, species, t) )
+    m = species.m
+
+    # Update cloud potentials
+    conditions.potential(positions, species, t, cloud.potens)
+
+    # Current temperature for ellipsoid sizing
+    T = (length(sensor.ke) > 0) ? 2 * last(sensor.ke) / (3 * kB) : Inf
+    N = 0
+    bound = - 2 * log(p)
+
+    σx² = kB * T / (m * ωx(t)^2)
+    σy² = kB * T / (m * ωy(t)^2)
+    σz² = kB * T / (m * ωz(t)^2)
+
+    cx, cy, cz = centre(t)
+
+    pe_tot = 0.0
+    ke_tot = 0.0
+
+    for atom in 1:Nt
+        x = cloud.positions[1, atom] - cx
+        y = cloud.positions[2, atom] - cy
+        z = cloud.positions[3, atom] - cz
+        if (x^2 / σx² + y^2 / σy² + z^2 / σz²) < bound
+            N += 1
+            vx, vy, vz = view(velocities, :, atom)
+            ke_tot += 0.5 * m * (vx^2 + vy^2 + vz^2)
+            pe_tot += cloud.potens[atom]
+        end
+    end
 
     push!(sensor.time, t)
-    push!(sensor.ke, ke)
-    push!(sensor.pe, pe)
+    push!(sensor.ke, ke_tot/N)
+    push!(sensor.pe, pe_tot/N)
     push!(sensor.F, cloud.F)
-    push!(sensor.Nt, size(positions, 2))
+    push!(sensor.Nt, Nt)
     push!(sensor.cand, cand_count)
     push!(sensor.coll, coll_count)
     push!(sensor.n0, n0)

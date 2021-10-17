@@ -13,6 +13,8 @@ mutable struct CloudBuffer
     velocities :: Matrix{Float64}
 
     accels :: Matrix{Float64}
+    potens :: Vector{Float64}
+    survival_prob :: Vector{Float64}
 
     assignments :: Vector{Int64}
     cell_offsets :: Vector{Int64}
@@ -32,6 +34,8 @@ mutable struct CloudBuffer
         vel = copy(conditions.velocities)
         Nt = size(pos, 2)
         acc = zeros(Float64, 3, Nt)
+        pot = zeros(Float64, Nt)
+        prob = zeros(Float64, Nt)
         assign = zeros(Int64, Nt)
         atoms = zeros(Int64, Nt)
 
@@ -45,13 +49,13 @@ mutable struct CloudBuffer
         cellcount = 1
 
         # Return cloud
-        return new(pos, vel, acc, assign, offsets, occupancies, atoms,
+        return new(pos, vel, acc, pot, prob, assign, offsets, occupancies, atoms,
                    Nt, conditions.F, cellcount, nonempty_count, cellsize)
     end
 end
 
 # Velocty Verlet step + calculate motion-based limit on next timestep
-function verlet_step!(cloud, conditions, t, dt, motion_limit)
+function verlet_step!(cloud, conditions, t, dt)
     Nt = cloud.Nt
     positions = view(cloud.positions, :, 1:Nt)
     velocities = view(cloud.velocities, :, 1:Nt)
@@ -65,19 +69,16 @@ function verlet_step!(cloud, conditions, t, dt, motion_limit)
     # Acceleration halfway through timestep (modifies cloud.accels in-place)
     conditions.acceleration(positions, conditions.species, t + half_dt, accels)
     # Compute final velocities and positions, as well as new timestep
-    min_timestep = Inf
     for atom in 1:Nt
-        a = view(accels, :, atom)
-        v = view(velocities, :, atom)
-        v .+= dt .* a # Update velocity
-        positions[:, atom] .+= half_dt .* v # Update position
-        speed = norm(v)
-        acc = norm(a)
-        timestep = motion_limit / (acc * speed)
-        min_timestep = min(min_timestep, timestep)
+        ax, ay, az = view(accels, :, atom)
+        velocities[1, atom] += dt * ax # Update velocity
+        velocities[2, atom] += dt * ay
+        velocities[3, atom] += dt * az
+        vx, vy, vz = view(velocities, :, atom)
+        positions[1, atom] += half_dt * vx # Update position
+        positions[2, atom] += half_dt * vy
+        positions[3, atom] += half_dt * vz
     end
-
-    return min_timestep
 end
 
 # Assign particles to cells
@@ -86,8 +87,17 @@ function assign_cells!(cloud, peak_free_path, Nc, Vprev)
     positions = view(cloud.positions, :, 1:N)
 
     # Corners of the bounding box around all atoms
-    minpos = minimum(positions, dims=2)
-    maxpos = maximum(positions, dims=2)
+    minx, miny, minz = Inf, Inf, Inf
+    maxx, maxy, maxz = -Inf, -Inf, -Inf
+    for atom in 1:N
+        x, y, z = view(positions, :, atom)
+        if x < minx; minx = x; elseif x > maxx; maxx = x; end;
+        if y < miny; miny = y; elseif y > maxy; maxy = y; end;
+        if z < minz; minz = z; elseif z > maxz; maxz = z; end;
+    end
+
+    minpos = [minx, miny, minz]
+    maxpos = [maxx, maxy, maxz]
 
     # Cell dimensions
     V = min(Vprev, prod(maxpos - minpos)) # Volume estimate
@@ -198,7 +208,8 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
         speeds = zeros(Float64, Nc)
         for i in 1 : Nc
             atom = atom_lookup[i + offset - 1]
-            speeds[i] = norm(view(velocities, :, atom))
+            vx, vy, vz = view(velocities, :, atom)
+            speeds[i] = sqrt(vx^2 + vy^2 + vz^2)
         end
         max_speed = maximum(speeds)
         # Select appropriate number of pairs
@@ -208,9 +219,9 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
         Mcand = ceil(Int64, Mraw)
         Mcoll = 0 # Total collisions in cell
         prob_adjust = Mraw / Mcand # Adjustment for rounding
-        Pcoll = rand(rng, Mcand)
+        Pcoeff = prob_adjust / (2 * max_speed)
         # Check and perform collisions
-        for j in 1:Mcand
+        for _ in 1:Mcand
             i1, i2 = samplepair(rng, Nc)
             atom1 = atom_lookup[i1 + offset - 1]
             atom2 = atom_lookup[i2 + offset - 1]
@@ -218,7 +229,8 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
             u1x, u1y, u1z = view(velocities, :, atom1)
             u2x, u2y, u2z = view(velocities, :, atom2)
             urel = sqrt((u1x - u2x)^2 + (u1y - u2y)^2 + (u1z - u2z)^2)
-            if Pcoll[j] < urel * prob_adjust / (2 * max_speed) # Collision prob.
+            Pij = urel * Pcoeff
+            if rand(rng) < Pij # Collision prob.
                 # Compute new relative velocity
                 ϕ = 2 * π * rand(rng)
                 cosθ = 2 * rand(rng) - 1
@@ -247,7 +259,8 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
                 speed2 = sqrt(v2x^2+ v2y^2+ v2z^2)
                 speeds[i1] = speed1
                 speeds[i2] = speed2
-                max_speed = maximum(speeds)#max(max_speed, speed1, speed2)
+                max_speed = max(max_speed, speed1, speed2) #maximum(speeds)
+                Pcoeff = prob_adjust / (2 * max_speed)
                 Mcoll += 1
             end
         end
@@ -257,14 +270,14 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
 
     # Calculate collision-based timestep limit
     Γₐ = 2 * tot_coll / (cloud.Nt * dt) # Mean collision rate per atom
-    dt = 30/Γₐ
+    dt = 1/Γₐ
 
     return dt, tot_cand, tot_coll
 end
 
 # Atom loss effects: high-energy particles, three-body recombination &
 # background collisions.
-function atom_loss!(cloud, conditions, t, dt)
+function atom_loss!(cloud, conditions, t, dt, rng=MersenneTwister())
     τ_bg, K, evap = conditions.τ_bg, conditions.threebodyloss, conditions.evaporate
 
     N₀, F = cloud.Nt, cloud.F
@@ -272,8 +285,9 @@ function atom_loss!(cloud, conditions, t, dt)
     positions = view(cloud.positions, :, 1:N₀)
     velocities = view(cloud.velocities, :, 1:N₀)
 
-    # Evaporation survival probability for each atom
-    p_survive = 1 .- evap(positions, velocities, conditions, t)
+    # Evaporation LOSS probability for each atom (becomes survival later)
+    p_survive = view(cloud.survival_prob, 1:N₀)
+    evap(positions, velocities, conditions, t, p_survive)
 
     p_background = 1 - (dt / τ_bg) # Background survival probability (const.)
     for cell in 1:cloud.cellcount
@@ -284,14 +298,14 @@ function atom_loss!(cloud, conditions, t, dt)
         for i in offset : offset + Nc - 1
             # Update survival likelihood to reflect 3-body + background loss
             atom = cloud.atom_lookup[i]
-            p_survive[atom] *= p_background * p_threebody
+            p_survive[atom] = (1.0 - p_survive[atom]) * p_background * p_threebody
         end
     end
 
     # Perform atom loss
     N = N₀
     for atom in N₀:-1:1
-        if rand() > p_survive[atom]
+        if rand(rng) > p_survive[atom]
             # Remove atom by replacing it with atom from the end
             velocities[:,atom] .= view(velocities, :, N)
             positions[:,atom] .= view(positions, :, N)
@@ -334,8 +348,7 @@ function evolve(conditions, duration;
     - conditions: a SimulationConditions
     - duration: in virtual time
     - Nc: target average number of atoms per cell.
-    - max_dt: upper bound on timestep. In a harmonic trap,
-    this is recommended to be ( 0.05 * 2π / [max angular trapping freq.] )
+    - max_dt: upper bound on timestep.
     - rng: allows reproducibility if desired.
     =#
 
@@ -347,9 +360,7 @@ function evolve(conditions, duration;
     
     # Initial values
     peak_density, _, V = assign_cells!(cloud, 1e-5, Nc, Inf)
-    dt = max_dt(0)
-    motion_limit = 0.01 # Relate max. timestep to max. motion
-    # ANU trap: use 0.001
+    dt = min(max_dt(0), 1e-9) # Begin with very short timestep
 
     # Track progress
     prog_detail = 10000
@@ -362,7 +373,7 @@ function evolve(conditions, duration;
     start_time = now()
     while t < duration
         # Collisionless motion
-        motion_dt = verlet_step!(cloud, conditions, t, dt, motion_limit)
+        verlet_step!(cloud, conditions, t, dt)
 
         # Sort atoms by cell
         peak_free_path = 1 / (4 * peak_density * σ);
@@ -371,7 +382,7 @@ function evolve(conditions, duration;
         # Perform collisions
         coll_dt, cand_count, coll_count = collision_step!(cloud, dt, σ, rng)
 
-        atom_loss!(cloud, conditions, t, dt)
+        atom_loss!(cloud, conditions, t, dt, rng)
         
         if cloud.Nt == 0
             @warn "Trap empty"
@@ -384,7 +395,7 @@ function evolve(conditions, duration;
 
         # Increment time and then update timestep
         t += dt
-        dt = min(coll_dt, max_dt(t), motion_dt)
+        dt = min(coll_dt, max_dt(t))
 
         # External measurements on system after one full iteration
         measure(cloud, conditions, cand_count, coll_count, t, peak_density, V)
@@ -396,7 +407,6 @@ function evolve(conditions, duration;
                 ("Real time", now() - start_time),
                 ("Iterations", iter_count),
                 ("Coll. dt", @sprintf("%.3g", coll_dt)),
-                ("Motion dt", @sprintf("%.3g", motion_dt)),
                 ("Max. dt", @sprintf("%.3g", max_dt(t))),
                 ("dt", @sprintf("%.3g", dt)),
                 ("Cell size", @sprintf("%.3g x %.3g x %.3g", cloud.cellsize...)),

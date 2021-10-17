@@ -3,10 +3,10 @@ using StatsPlots
 using Printf: @sprintf
 using LaTeXStrings
 
-function otago_ghost_trap(duration = 0.24)
+function under_beam_trap(duration = 1.97, input_dir = "")
     # Physical parameters
-    Np = 1.6e6 # Initial atom count
-    T₀ = 2e-6 # Initial temperature
+    Np = 3e7 # Initial atom count
+    T₀ = 15e-6 # Initial temperature
     species = Rb87
 
     # Numerical parameters
@@ -15,71 +15,79 @@ function otago_ghost_trap(duration = 0.24)
     Nc = 3 # Target number of test particles per cell
 
     # Beam parameters
-    P_h = 0.52 # Horizontal
-    P_v = 0.09 # Vertical
-    P_g = 0.29 # Ghost
+    P₁ = 15
+    P₂ = 7.5
+    P_g = 15 #100 - 90 * exp(-t / 0.8)
 
-    w_h = 60e-6 # Beam waist (m)
-    w_v = 40e-6
-    w_g = 40e-6
+    w₀ = 130e-6 # Waist (m)
+    θ = ( 22.5 * π / 180 ) / 2 # Half-angle between beams
+    ϕ = 5 * π / 180 # Tilt angle of under-beam
 
-    dir_h = [0, 0, 1]
-    dir_v = [0, -1, 0]
-    dir_g = [0, -1, 0]
-    
-    λ = 1064e-9 
+    dir1 = [sin(θ), 0, cos(θ)] # Directions
+    dir2 = [-sin(θ), 0, cos(θ)]
+    dir_g = [cos(ϕ), sin(ϕ), 0]
 
-    # Ghost beam focus
-    foc_g = (t) -> [85e-6, 0, 0] + (t/0.24) * [-30e-6, 0, 0]
+    λ₁ = 1064e-9 # Wavelengths
+    λ₂ = 1090e-9
+    λ_g = 1090e-9
 
-    beam_h = GaussianBeam([0,0,0], dir_h, P_h, w_h, λ)
-    beam_v = GaussianBeam([0,0,0], dir_v, P_v, w_v, λ)
-    beam_g = GaussianBeam(foc_g, dir_g, P_g, w_g, λ)
+    foc_g = (t) -> [0, -2w₀ + (t/1.97) * w₀, 0]
+
+    beam1 = GaussianBeam([0,0,0], dir1, P₁, w₀, λ₁)
+    beam2 = GaussianBeam([0,0,0], dir2, P₂, w₀, λ₂)
+    beam_g = GaussianBeam(foc_g, dir_g, P_g, w₀, λ_g)
 
     # Trapping frequencies
     m = species.m
     κ = kappa(species)
 
-    ωr²_v = 8κ*P_v / (m * π * w_v^4) # Radial trapping frequency
-    ωr²_h = 8κ*P_h / (m * π * w_h^4)
+    Uₜ_coeff = 2 * κ / (π * w₀^2)
+    Uₜ(t) = Uₜ_coeff * (P₁(t) + P₂(t)) #Trap depth
 
-    ωx = sqrt(ωr²_v + ωr²_h)
-    ωy = sqrt(ωr²_h)
-    ωz = sqrt(ωr²_v)
+    ωx_coeff = sqrt(4 * cos(θ)^2 / (m * w₀^2))
+    ωz_coeff = sqrt(4 * sin(θ)^2 / (m * w₀^2))
+    ωy_coeff = sqrt(4 / (m * w₀^2))
+
+    ωx(t) = ωx_coeff * sqrt(Uₜ(t))
+    ωz(t) = ωz_coeff * sqrt(Uₜ(t))
+    ωy(t) = ωy_coeff * sqrt(Uₜ(t))
 
     # Cloud initialisation
-    positions = harmonic_boltzmann_positions(Nt, m, T₀, ωx, ωy, ωz)
+    positions = harmonic_boltzmann_positions(Nt, m, T₀, ωx(0), ωy(0), ωz(0))
     velocities = boltzmann_velocities(Nt, m, T₀)
 
-    # Translate to equilibrium position
-    y₀ = - g / ωy^2
-    centre = [0, y₀, 0]
-    positions .+= centre
+    # Adjust vertical equilibrium position
+    function y0(t)
+        q = -4*g^2 / (ωy(t)^4 * w₀^2)
+        return - w₀/2 * sqrt(- q * exp(q))
+    end
+
+    centre(t) = [0, y0(t), 0]
+    positions .+= centre(0)
 
     # Three-body loss & background loss
     K = 4.3e-29 * 1e-12
     τ_bg = 180
 
     # Maximum timestep
-    max_dt = 0.05 * 2π / max(ωx, ωy, ωz)
+    max_dt(t) = 0.05 * 2π / max(ωx(t), ωy(t), ωz(t))
 
-    # Gravity
+    # Gravitaty
     acc_grav! = acceleration(gravity)
     pot_grav! = potential(gravity)
 
     # GAUSSIAN BEAM SIMULATION
-    acc_h! = acceleration(beam_h)
-    acc_v! = acceleration(beam_v)
+    acc_b1! = acceleration(beam1)
+    acc_b2! = acceleration(beam2)
     acc_g! = acceleration(beam_g)
-
-    pot_h! = potential(beam_h)
-    pot_v! = potential(beam_v)
+    pot_b1! = potential(beam1)
+    pot_b2! = potential(beam2)
     pot_g! = potential(beam_g)
 
     function accel(p, s, t, o)
         fill!(o, 0.0)
-        acc_h!(p, s, t, o)
-        acc_v!(p, s, t, o)
+        acc_b1!(p, s, t, o)
+        acc_b2!(p, s, t, o)
         acc_g!(p, s, t, o)
         acc_grav!(p, s, t, o)
         return nothing
@@ -87,8 +95,8 @@ function otago_ghost_trap(duration = 0.24)
 
     function poten(p, s, t, o)
         fill!(o, 0.0)
-        pot_h!(p, s, t, o)
-        pot_v!(p, s, t, o)
+        pot_b1!(p, s, t, o)
+        pot_b2!(p, s, t, o)
         pot_g!(p, s, t, o)
         pot_grav!(p, s, t, o)
         return nothing
@@ -103,12 +111,16 @@ function otago_ghost_trap(duration = 0.24)
     conditions = SimulationConditions(species, F, positions, velocities,
         accel, poten, evap = evap, τ_bg = τ_bg, K = K)
 
-    final_cloud = evolve(conditions, duration;
-        Nc = Nc, max_dt = max_dt, measure = measure)
+    if input_dir == "" # Simulate new results
+        final_cloud = evolve(conditions, duration;
+            Nc = Nc, max_dt = max_dt, measure = measure)
+    else # Load provided results
+        sensor = loadsensor("$input_dir/sensor-data.csv")
+    end
 
-    # Save sensor data (before plotting, in case plotting fails)
+    # Save sensor data before plotting
     ft = filetime()
-    dir = "./results/$ft-otago-ghost-trap"
+    dir = "./results/$ft-anu-crossbeam-trap"
     mkpath(dir)
     savecsv(sensor, "$dir/sensor-data.csv")
 
@@ -144,12 +156,12 @@ function otago_ghost_trap(duration = 0.24)
         dpi = 300)
     
     # Number
-    instant_Np = sensor.Nt .* sensor.F
+    Np = sensor.Nt .* sensor.F
 
     num_order = 6
     num_yformatter(y) = @sprintf("%.2f",y/(10.0^num_order))
 
-    number_plt = plot(time, instant_Np,
+    number_plt = plot(time, Np,
         xlabel = "Time (s)",
         ylabel = L"\textrm{Number\ \ }({}\times10^{%$num_order})",
         label = false,

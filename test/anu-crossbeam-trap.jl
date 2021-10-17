@@ -65,24 +65,29 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     max_dt(t) = 0.05 * 2π / max(ωx(t), ωy(t), ωz(t))
 
     # Gravitaty
-    acc_grav = acceleration(gravity)
-    pot_grav = potential(gravity)
+    acc_grav! = acceleration(gravity)
+    pot_grav! = potential(gravity)
 
     # GAUSSIAN BEAM SIMULATION
-    acc_b1 = acceleration(beam1)
-    acc_b2 = acceleration(beam2)
-    pot_b1 = potential(beam1)
-    pot_b2 = potential(beam2)
+    acc_b1! = acceleration(beam1)
+    acc_b2! = acceleration(beam2)
+    pot_b1! = potential(beam1)
+    pot_b2! = potential(beam2)
 
     function accel_gb(p, s, t, o)
-        a1 = acc_b1(p, s, t)
-        a2 = acc_b2(p, s, t)
-        a3 = acc_grav(p, s, t)
-        return (o .= a1 + a2 + a3)
+        fill!(o, 0.0)
+        acc_b1!(p, s, t, o)
+        acc_b2!(p, s, t, o)
+        acc_grav!(p, s, t, o)
+        return nothing
     end
 
-    function poten_gb(p, s, t)
-        return pot_b1(p, s, t) + pot_b2(p, s, t) + pot_grav(p, s, t)
+    function poten_gb(p, s, t, o)
+        fill!(o, 0.0)
+        pot_b1!(p, s, t, o)
+        pot_b2!(p, s, t, o)
+        pot_grav!(p, s, t, o)
+        return nothing
     end
 
     sensor_gb = GlobalSensor()
@@ -102,13 +107,30 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
 
     # HARMONIC SIMULATION
     harm = HarmonicField(ωx, ωy, ωz, centre)
-    acc_harm = acceleration(harm)
-    pot_harm = potential(harm)
+    acc_harm! = acceleration(harm)
+    pot_harm! = potential(harm)
 
-    accel_harm(p, s, t, o) = (o .= acc_harm(p, s, t) + acc_grav(p, s, t))
-    poten_harm(p, s, t) = pot_harm(p, s, t) + pot_grav(p, s, t)
+    function accel_harm(p, s, t, o)
+        fill!(o, 0.0)
+        acc_harm!(p, s, t, o)
+        acc_grav!(p, s, t, o)
+        return nothing
+    end
 
-    evap_harm = energy_evap(Uₜ, pot_harm)
+    function poten_harm(p, s, t, o)
+        fill!(o, 0.0)
+        pot_harm!(p, s, t, o)
+        pot_grav!(p, s, t, o)
+        return nothing
+    end
+
+    function pot_evap_harm(p, s, t, o)
+        fill!(o, 0.0)
+        pot_harm!(p, s, t, o)
+        return nothing
+    end
+
+    evap_harm = energy_evap(Uₜ, pot_evap_harm)
 
     sensor_harm = GlobalSensor()
     measure_harm = measurer(sensor_harm, 0.001, ωx, ωy, ωz, centre)
@@ -127,6 +149,14 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
         sensor_harm = loadsensor("$input_dir/sensor-harm-data.csv")
     end
 
+    # Save sensor data (before plotting, in case plotting fails)
+    ft = filetime()
+    dir = "./results/$ft-anu-crossbeam-trap"
+    mkpath(dir)
+
+    savecsv(sensor_gb, "$dir/sensor-gb-data.csv")
+    savecsv(sensor_harm, "$dir/sensor-harm-data.csv")
+
     # THEORY
     # Pethick model
     peth_t, peth_N, peth_T, peth_Γ = harmonic_theory(
@@ -142,7 +172,7 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
         linewidth=2, framestyle=:box, label=nothing, grid=false)
     #scalefontsizes(1.3)
 
-    window_time = 4e-2
+    window_time = min(4e-2, duration/2)
     gb_time = sensor_gb.time
     harm_time = sensor_harm.time
     gb_window_size = OptEvapCool.window_time_size(gb_time, window_time)
@@ -160,7 +190,7 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     rolling_gb_temp = 2 / (3 * kB) * rollmean(sensor_gb.ke, gb_window_size)
     rolling_harm_temp = 2 / (3 * kB) * rollmean(sensor_harm.ke, harm_window_size)
 
-    temp_order = -5
+    temp_order = -6
     temp_yformatter(y) = @sprintf("%.2f",y/(10.0^temp_order))
     
     temperature_plt = plot(rolling_gb_time, rolling_gb_temp,
@@ -245,18 +275,11 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     plot!(rolling_harm_time, rolling_harm_psd,
           label = false, linecolor = col2, ls= :dash)
 
-    # Save plots and files
-    ft = filetime()
-    dir = "./results/$ft-anu-crossbeam-trap"
-    mkpath(dir)
-
+    # Save plots
     savefig(temperature_plt, "$dir/temp.png")
     savefig(collrate_plt, "$dir/collrate.png")
     savefig(number_plt, "$dir/number.png")
     savefig(psd_plt, "$dir/psd.png")
-
-    savecsv(sensor_gb, "$dir/sensor-gb-data.csv")
-    savecsv(sensor_harm, "$dir/sensor-harm-data.csv")
 
     return nothing
 end

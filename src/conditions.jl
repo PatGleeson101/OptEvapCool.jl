@@ -114,28 +114,31 @@ const gravity = UniformField([0, -g, 0])
 function acceleration(field::UniformField, positions, species, t, output)
     # 'species' parameter required to conform to correct call signature.
     Nt = size(positions, 2)
-    str = field.strength(t)
-    for atom in 1:Nt
-        output[:, atom] .= str
+    strx, stry, strz = field.strength(t)
+    Threads.@threads for atom in 1:Nt
+        output[1, atom] += strx
+        output[2, atom] += stry
+        output[3, atom] += strz
     end
-    return output
+    return nothing
 end
 
 # Potential (constant field)
 function potential(field::UniformField, positions, species, t, output)
     # 'species' parameter required to conform to correct call signature.
     Nt = size(positions, 2)
-    strength = field.strength(t)
-    origin = field.origin(t)
-    for atom in 1:Nt
-        pos = view(positions, :, atom)
-        output[atom] = - species.m * dot(strength, pos - origin)
+    strx, stry, strz = field.strength(t)
+    ox, oy, oz = field.origin(t)
+    m = species.m
+    Threads.@threads for atom in 1:Nt
+        px, py, pz = view(positions, :, atom)
+        output[atom] -= m * (strx * (px - ox) + stry * (py - oy) + strz * (pz - oz))
     end
-    return output
+    return nothing
 end
 
 # Overload accel/potential by generating new output array when none provided.
-acceleration(f, p, s, t) = acceleration(f, p, s, t, zeros(Float64, size(p)...))
+acceleration(f, p, s, t) = acceleration(f, p, s, t, zeros(Float64, size(p)))
 potential(f, p, s, t) = potential(f, p, s, t, zeros(Float64, size(p, 2)))
 # Initialise a potential or acceleration function to
 potential(f) = (args...) -> potential(f, args...) #pos, spec, t, out
@@ -148,28 +151,28 @@ function acceleration(field::HarmonicField, positions, species, t, output)
     cx, cy, cz = field.centre(t)
     ωx2, ωy2, ωz2 = field.ωx(t)^2, field.ωy(t)^2, field.ωz(t)^2
     Threads.@threads for atom in 1:Nt
-        output[1, atom] = - ωx2 * (positions[1, atom] - cx)
-        output[2, atom] = - ωy2 * (positions[2, atom] - cy)
-        output[3, atom] = - ωz2 * (positions[3, atom] - cz)
+        output[1, atom] -= ωx2 * (positions[1, atom] - cx)
+        output[2, atom] -= ωy2 * (positions[2, atom] - cy)
+        output[3, atom] -= ωz2 * (positions[3, atom] - cz)
     end
-    return output
+    return nothing
 end
 
 # Potential (harmonic field)
 function potential(field::HarmonicField, positions, species, t, output)
     Nt = size(positions, 2)
     m = species.m
-    centre = field.centre(t)
+    cx, cy, cz = field.centre(t)
     ωx2, ωy2, ωz2 = field.ωx(t)^2, field.ωy(t)^2, field.ωz(t)^2
     Threads.@threads for atom in 1:Nt
-        x, y, z = view(positions, :, atom) .- centre
-        output[atom] = 0.5 * m * (ωx2 * x^2 + ωy2 * y^2 + ωz2 * z^2)
+        x, y, z = view(positions, :, atom)
+        output[atom] += 0.5 * m * (ωx2 * (x-cx)^2 + ωy2 * (y-cy)^2 + ωz2 * (z-cz)^2)
     end
-    return output
+    return nothing
 end
 
 # Get parameters of a Gaussian beam
-parameters(b::GaussianBeam, t) = ( b.focus(t), b.direction(t), b.power(t),
+parameters(b::GaussianBeam, t::Float64) = ( b.focus(t), b.direction(t), b.power(t),
                                    b.waist(t), b.wavelength(t) )
 
 # Acceleration (Gaussian beam)
@@ -194,11 +197,11 @@ function acceleration(field::GaussianBeam, positions, species, t, output)
         rz = dz - (z * uz)
         r² = rx^2 + ry^2 + rz^2
         a = (-acoeff * exp(r²coeff * r²))
-        output[1, atom] = a*rx
-        output[2, atom] = a*ry
-        output[3, atom] = a*rz
+        output[1, atom] += a*rx
+        output[2, atom] += a*ry
+        output[3, atom] += a*rz
     end
-    return output
+    return nothing
 end
 
 # Potential (Gaussian beam)
@@ -219,9 +222,9 @@ function potential(field::GaussianBeam, positions, species, t, output)
         dz = pz - fz
         z = dx*ux + dy*uy + dz*uz
         r² = (dx^2 + dy^2 + dz^2) - z^2
-        output[atom] = Ucoeff * exp(r²coeff * r²) - Ucoeff
+        output[atom] += Ucoeff * exp(r²coeff * r²) - Ucoeff
     end
-    return output
+    return nothing
 end
 
 # EVAPORATION PROBABILITIES
@@ -233,28 +236,35 @@ exponential_ramp(start, stop, τ) = (t) -> stop + (start - stop) * exp(- t / τ)
 linear_ramp(start, stop, τ) = (t) -> start + (stop - start) * (t / τ)
 
 # Perfect energy-based removal
-function energy_evap(εₜ, positions, velocities, conditions, potential, t)
-    pe = potential(positions, conditions.species, t)
-    ke = 0.5 * conditions.species.m * sum(velocities .* velocities, dims = 1)
-    for atom in eachindex(pe)
-        if pe[atom] + ke[atom] > εₜ
-            pe[atom] = 1
+function energy_evap(εₜ, positions, velocities, conditions,
+        potential, t, out = zeros(Float64, size(positions, 2)))
+
+    potential(positions, conditions.species, t, out)
+    #out initially contains pe
+    m = conditions.species.m
+    N = size(positions, 2)
+    for atom in 1:N
+        vx, vy, vz = view(velocities, :, atom)
+        ke = 0.5 * m * (vx^2 + vy^2 + vz^2)
+        if out[atom] + ke > εₜ
+            out[atom] = 1 # Replace PE with evaporation probability
         else
-            pe[atom] = 0
+            out[atom] = 0
         end
     end
-    prob = pe # Evaporation probabilities
-    return prob
+    return out
 end
 
 # Overload for correct type signature and time-parametrisation
 function energy_evap(depth, potential)
     εₜ = time_parametrize(depth)
-    return (pos, vel, cond, t) -> energy_evap(εₜ(t), pos, vel, cond, potential, t)
+    return (pos, vel, cond, t, o) -> energy_evap(εₜ(t), pos, vel, cond, potential, t, o)
 end
 
 # Removal when beyond ellipsoid
-function ellipsoid_evap(ωx, ωy, ωz, T, p, centre, species, positions)
+function ellipsoid_evap(ωx, ωy, ωz, T, p, centre,
+                        species, positions, out = zeros(Float64, size(positions, 2)))
+
     N = size(positions, 2)
 
     m = species.m
@@ -262,25 +272,29 @@ function ellipsoid_evap(ωx, ωy, ωz, T, p, centre, species, positions)
     σy² = kB * T / (m * ωy^2)
     σz² = kB * T / (m * ωz^2)
 
-    evap_prob = zeros(Float64, N)
     bound = -2 * log(p) # Boundary condition
+    cx, cy, cz = centre
 
     for atom in 1:N
-        x, y, z = view(positions, :, atom) .- centre
+        x = positions[1, atom] - cx
+        y = positions[2, atom] - cy
+        z = positions[3, atom] - cz
         if (x^2 / σx² + y^2 / σy² + z^2 / σz²) > bound
-            evap_prob[atom] = 1
+            out[atom] = 1.0
+        else
+            out[atom] = 0.0
         end
     end
 
-    return evap_prob
+    return out
 end
 
 # Overload for correct type signature and time-parametrisation
 function ellipsoid_evap(ωx, ωy, ωz, T, p, centre = [0.0,0,0])
     ω_x, ω_y, ω_z, T = time_parametrize(ωx, ωy, ωz, T)
     centre = time_parametrize(centre)
-    function evap(pos, vel, cond, t)
-        return ellipsoid_evap(ω_x(t), ω_y(t), ω_z(t), T(t), p, centre(t), cond.species, pos)
+    function evap(pos, vel, cond, t, o)
+        return ellipsoid_evap(ω_x(t), ω_y(t), ω_z(t), T(t), p, centre(t), cond.species, pos, o)
     end
     return evap
 end
