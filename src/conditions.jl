@@ -10,7 +10,7 @@ const c = 3e8 # Speed of light (m/s)
 const ε₀ = 8.854e-12 # Vacuum permittivity
 const h̄ = 6.626e-34 / (2 * π) # Reduced Planck
 const g = 9.81 # Gravity
-const a₀ = 5.28e-9 # Bohr radius
+const a₀ = 5.28e-11 # Bohr radius
 
 # ATOM INITIALISATION
 
@@ -244,9 +244,9 @@ function energy_evap(εₜ, positions, velocities, conditions,
     m = conditions.species.m
     N = size(positions, 2)
     for atom in 1:N
-        vx, vy, vz = view(velocities, :, atom)
-        ke = 0.5 * m * (vx^2 + vy^2 + vz^2)
-        if out[atom] + ke > εₜ
+        #vx, vy, vz = view(velocities, :, atom)
+        #ke = 0.5 * m * (vx^2 + vy^2 + vz^2)
+        if out[atom] > εₜ
             out[atom] = 1 # Replace PE with evaporation probability
         else
             out[atom] = 0

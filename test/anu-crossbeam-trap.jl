@@ -2,6 +2,7 @@ using OptEvapCool
 using StatsPlots
 using Printf: @sprintf
 using LaTeXStrings
+using Plots.PlotMeasures
 
 function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     # Physical parameters
@@ -10,13 +11,13 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     species = Rb87
 
     # Numerical parameters
-    Nt = ceil(Int64, 1e3) # Test particles
+    Nt = ceil(Int64, 1e4) # Test particles
     F = Np / Nt
     Nc = 3 # Target number of test particles per cell
 
     # Beam parameters
     P₁ = exponential_ramp(15, 1.5, 0.8) # Watts
-    P₂ = exponential_ramp(7.5, 1.5, 0.8)
+    P₂ = exponential_ramp(7.5, 1.5, 0.8) #7.5
 
     w₀ = 130e-6 # Waist (m)
     θ = ( 22.5 * π / 180 ) / 2 # Half-angle between beams
@@ -151,7 +152,7 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
 
     # Save sensor data (before plotting, in case plotting fails)
     ft = filetime()
-    dir = "./results/$ft-anu-crossbeam-trap"
+    dir = "./results/$ft-anu-crossbeam-trap-MODIFIED"
     mkpath(dir)
 
     savecsv(sensor_gb, "$dir/sensor-gb-data.csv")
@@ -170,9 +171,10 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     # PLOTTING
     default(fontfamily="Computer Modern",
         linewidth=2, framestyle=:box, label=nothing, grid=false)
-    #scalefontsizes(1.3)
+    scalefontsizes()
+    scalefontsizes(1.5)
 
-    window_time = min(4e-2, duration/2)
+    window_time = min(1e-2, duration/2)
     gb_time = sensor_gb.time
     harm_time = sensor_harm.time
     gb_window_size = OptEvapCool.window_time_size(gb_time, window_time)
@@ -191,7 +193,7 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     rolling_harm_temp = 2 / (3 * kB) * rollmean(sensor_harm.ke, harm_window_size)
 
     temp_order = -6
-    temp_yformatter(y) = @sprintf("%.2f",y/(10.0^temp_order))
+    temp_yformatter(y) = @sprintf("%.1f",y/(10.0^temp_order))
     
     temperature_plt = plot(rolling_gb_time, rolling_gb_temp,
         xlabel = "Time (s)",
@@ -199,6 +201,8 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
         label = false,
         linecolor = col1,
         ls = :solid,
+        ylims = (0, Inf),
+        minorticks = 5,
         yformatter = temp_yformatter,
         dpi = 300)
     plot!(rolling_harm_time, rolling_harm_temp,
@@ -211,7 +215,7 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     harm_Np = sensor_harm.Nt .* sensor_harm.F
 
     num_order = 6
-    num_yformatter(y) = @sprintf("%.2f",y/(10.0^num_order))
+    num_yformatter(y) = @sprintf("%.1f",y/(10.0^num_order))
 
     number_plt = plot(gb_time, gb_Np,
         xlabel = "Time (s)",
@@ -219,6 +223,8 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
         label = false,
         linecolor = col1,
         ls = :solid,
+        ylims = (0, Inf),
+        minorticks = 5,
         yformatter = num_yformatter,
         dpi = 300)
     plot!(harm_time, harm_Np,
@@ -271,15 +277,46 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
         label = false,
         linecolor = col1,
         ls = :solid,
+        ylims = (0, Inf),
+        minorticks = 5,
         dpi = 300)
     plot!(rolling_harm_time, rolling_harm_psd,
           label = false, linecolor = col2, ls= :dash)
+    
+    # Number vs PSD.
+    rolling_gb_Np = rollmean(gb_Np, gb_window_size)
+    rolling_harm_Np = rollmean(harm_Np, harm_window_size)
+
+    numtemp_plt = plot(rolling_gb_temp, rolling_gb_Np,
+        xlabel = L"\textrm{Temperature\ \ }({}\times10^{%$temp_order}\mathrm{K})",
+        ylabel = L"\textrm{Number\ \ }({}\times10^{%$num_order})",
+        yformatter = num_yformatter,
+        xformatter = temp_yformatter,
+        label = false,
+        linecolor = col1,
+        ls = :solid,
+        ylims = (0, Inf),
+        xlims = (0, Inf),
+        minorticks = 5,
+        right_margin = 5mm,
+        dpi = 300)
+    plot!(rolling_harm_temp, rolling_harm_Np,
+          label = false, linecolor = col2, ls= :dash)
+    plot!(rolling_harm_temp, rolling_harm_Np,
+          label = false, linecolor = col2, ls= :dash)
+    plot!(peth_T, peth_N, label = false, linecolor = col3, ls = :dot)
+    plot!(pur_T, pur_N, label = false, linecolor = col4, ls = :dashdot)
+    # Experimental Results
+    scatter!([800e-9], [6e6], color = "black", label = false,
+        markersize = 8, markershape = :utriangle)
+    #vline!([2.6], line = (:black, 5))
 
     # Save plots
     savefig(temperature_plt, "$dir/temp.png")
     savefig(collrate_plt, "$dir/collrate.png")
     savefig(number_plt, "$dir/number.png")
     savefig(psd_plt, "$dir/psd.png")
+    savefig(numtemp_plt, "$dir/numtemp.png")
 
     return nothing
 end

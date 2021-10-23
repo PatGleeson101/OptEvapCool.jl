@@ -30,6 +30,7 @@ docs/site/
 log/
 plots/
 results/
+figures/
 
 # MacOS file system management
 .DS_Store

@@ -2,15 +2,16 @@ using OptEvapCool
 using StatsPlots
 using Printf: @sprintf
 using LaTeXStrings
+using Plots.PlotMeasures
 
-function otago_ghost_trap(duration = 0.24)
+function otago_ghost_trap(duration = 0.24, input_dir = "")
     # Physical parameters
     Np = 1.6e6 # Initial atom count
     T₀ = 2e-6 # Initial temperature
     species = Rb87
 
     # Numerical parameters
-    Nt = ceil(Int64, 1e3) # Test particles
+    Nt = ceil(Int64, 1e5) # Test particles
     F = Np / Nt
     Nc = 3 # Target number of test particles per cell
 
@@ -95,16 +96,20 @@ function otago_ghost_trap(duration = 0.24)
     end
 
     sensor = GlobalSensor()
-    measure = measurer(sensor, 0.001, ωx, ωy, ωz, centre)
+    measure = measurer(sensor, 0.00001, ωx, ωy, ωz, centre)
 
     T(t) = (length(sensor.ke) > 0) ? 2 * last(sensor.ke) / (3 * kB) : T₀
     evap = ellipsoid_evap(ωx, ωy, ωz, T, 1e-6, centre)
 
     conditions = SimulationConditions(species, F, positions, velocities,
         accel, poten, evap = evap, τ_bg = τ_bg, K = K)
-
-    final_cloud = evolve(conditions, duration;
-        Nc = Nc, max_dt = max_dt, measure = measure)
+    
+    if input_dir == ""
+        final_cloud = evolve(conditions, duration;
+            Nc = Nc, max_dt = max_dt, measure = measure)
+    else
+        sensor = loadsensor("$(input_dir)/sensor-data.csv")
+    end
 
     # Save sensor data (before plotting, in case plotting fails)
     ft = filetime()
@@ -115,9 +120,10 @@ function otago_ghost_trap(duration = 0.24)
     # PLOTTING
     default(fontfamily="Computer Modern",
         linewidth=2, framestyle=:box, label=nothing, grid=false)
-    #scalefontsizes(1.3)
+    scalefontsizes()
+    scalefontsizes(1.5)
 
-    window_time = min(duration/2, 4e-2)
+    window_time = min(duration/2, 1e-2)
     time = sensor.time
     window_size = OptEvapCool.window_time_size(time, window_time)
     rolling_time = rollmean(time, window_size)
@@ -140,6 +146,8 @@ function otago_ghost_trap(duration = 0.24)
         label = false,
         linecolor = col1,
         ls = :solid,
+        ylims = (0, Inf),
+        minorticks = 5,
         yformatter = temp_yformatter,
         dpi = 300)
     
@@ -155,6 +163,8 @@ function otago_ghost_trap(duration = 0.24)
         label = false,
         linecolor = col1,
         ls = :solid,
+        ylims = (0, Inf),
+        minorticks = 5,
         yformatter = num_yformatter,
         dpi = 300)
 
@@ -186,14 +196,36 @@ function otago_ghost_trap(duration = 0.24)
         ylabel = "Phase space density",
         label = false,
         linecolor = col1,
+        ylims = (0, Inf),
+        minorticks = 5,
         ls = :solid,
         dpi = 300)
+    
+    # Number vs PSD
+    rolling_Np = rollmean(instant_Np, window_size)
+
+    numpsd_plt = plot(rolling_psd, rolling_Np,
+        xlabel = "Phase space density",
+        ylabel = L"\textrm{Number\ \ }({}\times10^{%$num_order})",
+        yformatter = num_yformatter,
+        label = false,
+        linecolor = col1,
+        ls = :solid,
+        ylims = (0, 1.8e6),
+        #xlims = (0, 2.8),
+        right_margin = 5mm,
+        minorticks = 5,
+        dpi = 300)
+    scatter!([2.6], [1.4e5], color = "black", label = false,
+        markersize = 8, markershape = :utriangle)
+    #vline!([2.6], line = (:black, 5))
 
     # Save plots
     savefig(temperature_plt, "$dir/temp.png")
     savefig(collrate_plt, "$dir/collrate.png")
     savefig(number_plt, "$dir/number.png")
     savefig(psd_plt, "$dir/psd.png")
+    savefig(numpsd_plt, "$dir/numpsd.png")
 
     return nothing
 end

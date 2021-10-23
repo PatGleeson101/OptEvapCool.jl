@@ -102,8 +102,7 @@ function assign_cells!(cloud, peak_free_path, Nc, Vprev)
     # Cell dimensions
     V = min(Vprev, prod(maxpos - minpos)) # Volume estimate
     Vc = V * Nc / N
-    ds = cbrt(Vc)
-    #ds = min(cbrt(Vc), peak_free_path)
+    ds = min(cbrt(Vc), 0.1 * peak_free_path)
     cellsize = [ds, ds, ds]
     cloud.cellsize = cellsize
 
@@ -181,7 +180,8 @@ function assign_cells!(cloud, peak_free_path, Nc, Vprev)
     cloud.cellcount = cellcount
 
     # Compute peak density.
-    peak_density = percentile(cell_occupancies, 97) / Vc
+    peak_density = maximum(cell_occupancies) / Vc
+    #percentile(cell_occupancies, 97) / Vc
 
     Vnew = cellcount * Vc # Total volume of non-empty cells
 
@@ -270,7 +270,7 @@ function collision_step!(cloud, dt, σ, rng=MersenneTwister())
 
     # Calculate collision-based timestep limit
     Γₐ = 2 * tot_coll / (cloud.Nt * dt) # Mean collision rate per atom
-    dt = 1/Γₐ
+    dt = 0.05/Γₐ
 
     return dt, tot_cand, tot_coll
 end
@@ -342,8 +342,8 @@ function duplicate!(cloud)
 end
 
 # Evolve initial conditions for desired duration
-function evolve(conditions, duration;
-    Nc = 1, max_dt = Inf, rng=MersenneTwister(), measure = null)
+function evolve(conditions, duration; Nc = 1, max_dt = Inf,
+    rng=MersenneTwister(), measure = null, meas_dt = 1e-4)
     #= Arguments
     - conditions: a SimulationConditions
     - duration: in virtual time
@@ -366,6 +366,13 @@ function evolve(conditions, duration;
     prog_detail = 10000
     progress = Progress(prog_detail, dt = 1, desc = "Simulation progress: ",
                 color = :green, showspeed = false, enabled = true, barlen=25)
+    
+    accum_cand = 0 # Accumulated since previous measurement
+    accum_coll = 0
+    accum_n0 = 0
+    accum_V = 0
+    meas_iter = 0
+    meas_t = -Inf # Previous measurement time
     
     # Iterate simulation
     t = 0 # Virtual time
@@ -397,8 +404,25 @@ function evolve(conditions, duration;
         t += dt
         dt = min(coll_dt, max_dt(t))
 
-        # External measurements on system after one full iteration
-        measure(cloud, conditions, cand_count, coll_count, t, peak_density, V)
+        # Record for measurements
+        accum_cand += cand_count
+        accum_coll += coll_count
+        accum_n0 += peak_density
+        accum_V += V
+
+        iter_count += 1
+
+        # External measurements on system at specified intervals
+        if t >= meas_t + meas_dt
+            elapsed_iter = iter_count - meas_iter
+            n0 = accum_n0 / elapsed_iter
+            V_avg = accum_V / elapsed_iter
+            measure(cloud, conditions, accum_cand, accum_coll, t, n0, V_avg)
+            accum_cand, accum_coll = 0, 0
+            accum_n0, accum_V = 0, 0
+            meas_t = t
+            meas_iter = iter_count
+        end
         
         #Update progress
         if (mod(iter_count, 100) == 0) || (t >= duration)
@@ -423,8 +447,6 @@ function evolve(conditions, duration;
                         showvalues = progressvalues)
             end
         end
-
-        iter_count += 1
     end
 
     # Return final positions and velocities
