@@ -11,13 +11,14 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     species = Rb87
 
     # Numerical parameters
-    Nt = ceil(Int64, 1e4) # Test particles
+    Nt = ceil(Int64, 1e5) # Test particles
     F = Np / Nt
     Nc = 3 # Target number of test particles per cell
 
     # Beam parameters
-    P₁ = exponential_ramp(15, 1.5, 0.8) # Watts
-    P₂ = exponential_ramp(7.5, 1.5, 0.8) #7.5
+    P₁ = exponential_ramp(15, 2, 0.8) # Watts
+    P₂ = exponential_ramp(7.5, 2, 0.8)
+    # Set final power to 1.5W to achieve BEC
 
     w₀ = 130e-6 # Waist (m)
     θ = ( 22.5 * π / 180 ) / 2 # Half-angle between beams
@@ -152,7 +153,7 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
 
     # Save sensor data (before plotting, in case plotting fails)
     ft = filetime()
-    dir = "./results/$ft-anu-crossbeam-trap-MODIFIED"
+    dir = "./results/$ft-anu-crossbeam-trap"
     mkpath(dir)
 
     savecsv(sensor_gb, "$dir/sensor-gb-data.csv")
@@ -283,7 +284,7 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     plot!(rolling_harm_time, rolling_harm_psd,
           label = false, linecolor = col2, ls= :dash)
     
-    # Number vs PSD.
+    # Number vs temp.
     rolling_gb_Np = rollmean(gb_Np, gb_window_size)
     rolling_harm_Np = rollmean(harm_Np, harm_window_size)
 
@@ -300,14 +301,37 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
         minorticks = 5,
         right_margin = 5mm,
         dpi = 300)
-    plot!(rolling_harm_temp, rolling_harm_Np,
-          label = false, linecolor = col2, ls= :dash)
+    #=
     plot!(rolling_harm_temp, rolling_harm_Np,
           label = false, linecolor = col2, ls= :dash)
     plot!(peth_T, peth_N, label = false, linecolor = col3, ls = :dot)
     plot!(pur_T, pur_N, label = false, linecolor = col4, ls = :dashdot)
+    =#
     # Experimental Results
-    scatter!([800e-9], [6e6], color = "black", label = false,
+    scatter!([700e-9], [6e6], color = "black", label = false,
+        markersize = 8, markershape = :utriangle)
+    #vline!([2.6], line = (:black, 5))
+
+    # Number vs PSD.
+    numpsd_plt = plot(rolling_gb_psd, rolling_gb_Np,
+        xlabel = "Phase space density",
+        ylabel = L"\textrm{Number\ \ }({}\times10^{%$num_order})",
+        yformatter = num_yformatter,
+        label = false,
+        linecolor = col1,
+        ls = :solid,
+        ylims = (0, Inf),
+        xlims = (0, Inf),
+        minorticks = 5,
+        right_margin = 5mm,
+        dpi = 300)
+    # Experimental Results
+    expt_T = 700e-9
+    expt_N = 6e6
+    expt_n0 = expt_N * ωx(1.97) * ωy(1.97) * ωz(1.97) * (m / (2π*kB*expt_T))^1.5
+    expt_λdB =sqrt(2*π*h̄^2 / (m * kB * expt_T))
+    expt_psd = expt_n0 * expt_λdB^3
+    scatter!([expt_psd], [expt_N], color = "black", label = false,
         markersize = 8, markershape = :utriangle)
     #vline!([2.6], line = (:black, 5))
 
@@ -317,6 +341,7 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     savefig(number_plt, "$dir/number.png")
     savefig(psd_plt, "$dir/psd.png")
     savefig(numtemp_plt, "$dir/numtemp.png")
+    savefig(numpsd_plt, "$dir/numpsd.png")
 
     return nothing
 end

@@ -40,9 +40,9 @@ version = "3.5.0+3"
 
 [[ArrayInterface]]
 deps = ["Compat", "IfElse", "LinearAlgebra", "Requires", "SparseArrays", "Static"]
-git-tree-sha1 = "b8d49c34c3da35f220e7295659cd0bab8e739fed"
+git-tree-sha1 = "1d6835607e9f214cb4210310868f8cf07eb0facc"
 uuid = "4fba245c-0d91-5ea0-9b3e-6abc04ee57a9"
-version = "3.1.33"
+version = "3.1.34"
 
 [[Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
@@ -203,9 +203,9 @@ uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[Distributions]]
 deps = ["ChainRulesCore", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SparseArrays", "SpecialFunctions", "Statistics", "StatsBase", "StatsFuns"]
-git-tree-sha1 = "9809cf6871ca006d5a4669136c09e77ba08bf51a"
+git-tree-sha1 = "15dad92b6a36400c988de3fc9490a372599f5b4c"
 uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
-version = "0.25.20"
+version = "0.25.21"
 
 [[DocStringExtensions]]
 deps = ["LibGit2"]
@@ -288,9 +288,9 @@ version = "0.8.4"
 
 [[FlameGraphs]]
 deps = ["AbstractTrees", "Colors", "FileIO", "FixedPointNumbers", "IndirectArrays", "LeftChildRightSiblingTrees", "Profile"]
-git-tree-sha1 = "99c43a8765095efa6ef76233d44a89e68073bd10"
+git-tree-sha1 = "1d70df6fb4969bc8e2ab04988c950f8b5b87a37e"
 uuid = "08572546-2f56-4bcf-ba4e-bab62c3a3f89"
-version = "0.2.5"
+version = "0.2.6"
 
 [[Fontconfig_jll]]
 deps = ["Artifacts", "Bzip2_jll", "Expat_jll", "FreeType2_jll", "JLLWrappers", "Libdl", "Libuuid_jll", "Pkg", "Zlib_jll"]
@@ -730,7 +730,7 @@ version = "0.5.5+0"
 
 [[OptEvapCool]]
 deps = ["CSV", "DataFrames", "Dates", "Distributions", "LaTeXStrings", "LinearAlgebra", "Printf", "ProgressMeter", "Random", "RollingFunctions", "Statistics", "StatsBase", "StatsPlots"]
-git-tree-sha1 = "103b8ba35e482323e9ff493f21b739ad8e7f6e9a"
+git-tree-sha1 = "3dfc6cbd3d63c9e745aec3f19a7adbcc61b562b6"
 repo-rev = "main"
 repo-url = "https://github.com/PatGleeson101/OptEvapCool.jl.git"
 uuid = "4e692e60-ff15-4771-9c7d-e46a4f597447"
@@ -767,9 +767,9 @@ version = "1.47.0+0"
 
 [[Parsers]]
 deps = ["Dates"]
-git-tree-sha1 = "a8709b968a1ea6abc2dc1967cb1db6ac9a00dfb6"
+git-tree-sha1 = "f19e978f81eca5fd7620650d7dbea58f825802ee"
 uuid = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
-version = "2.0.5"
+version = "2.1.0"
 
 [[Pixman_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]

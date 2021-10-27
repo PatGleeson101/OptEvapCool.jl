@@ -23,14 +23,13 @@ function harmonic_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duratio
     dt = 0.000001
 
     ωx, ωy, ωz = time_parametrize(ωx, ωy, ωz)
+    trap_depth = time_parametrize(trap_depth)
 
     iter_count = ceil(Int64, duration / dt)
     N_series = zeros(Float64, iter_count)
     T_series = zeros(Float64, iter_count)
     Γ_series = zeros(Float64, iter_count)
     t_series = zeros(Float64, iter_count)
-    #γ_series = zeros(Float64, iter_count)
-    #depth_series = zeros(Float64, iter_count)
 
     m = species.m
     a = species.aₛ

@@ -3,30 +3,21 @@ using StatsPlots
 using Printf: @sprintf
 using LaTeXStrings
 
-function under_beam_trap(duration = 1.97, input_dir = "")
+function under_beam_trap(duration = 1.3, input_dir = "")
     # Physical parameters
     Np = 3e7 # Initial atom count
     T₀ = 15e-6 # Initial temperature
     species = Rb87
 
     # Numerical parameters
-    Nt = ceil(Int64, 1e4) # Test particles
+    Nt = ceil(Int64, 1e5) # Test particles
     F = Np / Nt
     Nc = 3 # Target number of test particles per cell
 
-    #=
-    Record 1:
-    P1 = 20, P2 = 10, P_g = (t < 1) ? 15 : 15 + 15*(t-1)/0.5,
-    foc_g(t) = (t < 1) ? [0, -0.00035 + t*0.00019, 0] : [0, -0.00016, 0]
-
-    Record 2:
-
-    =#
-
     # Beam parameters
-    P₁(t) = (t < 0.4) ? 7.5 : 5
-    P₂(t) = (t < 0.4) ? 15 : 10
-    P_g(t) = (t < 0.5) ? 15 : 15 + 15*(t-0.5)/0.5
+    P₁(t) = 20
+    P₂(t) = 10
+    P_g(t) = (t < 1) ? 15 : 15 + 9*(t-1)/0.3
 
     w₀ = 130e-6 # Waist (m)
     wg = 100e-6
@@ -41,11 +32,7 @@ function under_beam_trap(duration = 1.97, input_dir = "")
     λ₂ = 1090e-9
     λ_g = 1090e-9
 
-    #foc_g(t) = exp(-t/0.4)*[0, -0.00041, 0] + (1-exp(-t/0.4))*[0, -0.00016, 0]
-    #foc_g(t) = [0, -0.000175-0.00026*0.7*exp(-t/0.6), 0]
-    #foc_g(t) = [0, -0.000175-0.00026*0.7*exp(-t/0.3), 0]
-    #foc_g(t) = (t < 1) ? [0, -0.00040 + t*0.00023, 0] : [0, -0.00017, 0]
-    foc_g(t) = (t < 0.5) ? [0, -0.00040 + t*0.00022/0.5, 0] : [0, -0.00018, 0]
+    foc_g(t) = (t < 1) ? [0, -0.00035 + t*0.00019, 0] : [0, -0.00016, 0]
 
     beam1 = GaussianBeam([0,0,0], dir1, P₁, w₀, λ₁)
     beam2 = GaussianBeam([0,0,0], dir2, P₂, w₀, λ₂)
@@ -117,7 +104,7 @@ function under_beam_trap(duration = 1.97, input_dir = "")
     end
 
     sensor = GlobalSensor()
-    measure = measurer(sensor, 0.0001, ωx, ωy, ωz, centre)
+    measure = measurer(sensor, 0.001, ωx, ωy, ωz, centre)
 
     T(t) = (length(sensor.ke) > 0) ? 2 * last(sensor.ke) / (3 * kB) : T₀
     evap = ellipsoid_evap(ωx, ωy, ωz, T, 1e-6, centre)
@@ -143,7 +130,7 @@ function under_beam_trap(duration = 1.97, input_dir = "")
         linewidth=2, framestyle=:box, label=nothing, grid=false)
     #scalefontsizes(1.3)
 
-    window_time = min(duration/2, 4e-2)
+    window_time = min(duration/2, 1e-2)
     time = sensor.time
     window_size = OptEvapCool.window_time_size(time, window_time)
     rolling_time = rollmean(time, window_size)
