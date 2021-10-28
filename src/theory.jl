@@ -33,17 +33,20 @@ function harmonic_theory(species, ωx, ωy, ωz, T₀, N₀, trap_depth, duratio
 
     m = species.m
     a = species.aₛ
+    σ = species.σ
 
     t = 0
     N = N₀
     T = T₀
     i = 1
     while i <= iter_count
-        Γcoeff = 8*sqrt(2)*a^2 * m / (π * kB) * ωx(t) * ωy(t) * ωz(t)
-        Γ =  Γcoeff * N / T # Peak collision rate (per atom?)
+        n₀ = N * ωx(t) * ωy(t) * ωz(t) * (m / (2 * kB * T))^3/2
+        #Γcoeff = 8*sqrt(2)*a^2 * m / (π * kB) * ωx(t) * ωy(t) * ωz(t)
+        #Γ =  Γcoeff * N / T # Peak collision rate (per atom?)
+        Γ = n₀ * σ * sqrt(16 * kB * T / (π * m))
         εₜ = trap_depth(t)
         η = εₜ / (kB * T) # Truncation parameter
-        Ṅₑ = - N * Γ * η * exp(-η) # Evaporation rate
+        Ṅₑ = - N * Γ * η/sqrt(2) * exp(-η) # Evaporation rate
         Ṅₗ = - N / τ_bg # Background loss rate
         Ṅ = Ṅₑ + Ṅₗ # Total removal rate
         ε̄ = 3 * kB * T # Average energy

@@ -16,8 +16,8 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     Nc = 3 # Target number of test particles per cell
 
     # Beam parameters
-    P₁ = exponential_ramp(15, 2, 0.8) # Watts
-    P₂ = exponential_ramp(7.5, 2, 0.8)
+    P₁ = exponential_ramp(15, 1.5, 0.8) # Watts
+    P₂ = exponential_ramp(7.5, 1.5, 0.8)
     # Set final power to 1.5W to achieve BEC
 
     w₀ = 130e-6 # Waist (m)
@@ -289,7 +289,7 @@ function anu_crossbeam_trap(duration = 1.97, input_dir = "")
     rolling_harm_Np = rollmean(harm_Np, harm_window_size)
 
     numtemp_plt = plot(rolling_gb_temp, rolling_gb_Np,
-        xlabel = L"\textrm{Temperature\ \ }({}\times10^{%$temp_order}\mathrm{K})",
+        xlabel = L"\textrm{Temperature\ }(\mu K)",
         ylabel = L"\textrm{Number\ \ }({}\times10^{%$num_order})",
         yformatter = num_yformatter,
         xformatter = temp_yformatter,

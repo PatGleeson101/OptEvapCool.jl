@@ -4,14 +4,14 @@ using Printf: @sprintf
 using LaTeXStrings
 using Plots.PlotMeasures
 
-function harmonic_verification_trap(duration = 2)
+function harmonic_verification_trap(duration = 2, input_dir = "")
     # Physical parameters
     Np = 1e7 # Initial atom count
-    T₀ = 10e-6 # Initial temperature
+    T₀ = 1e-6 # Initial temperature
     species = Rb87
 
     # Numerical parameters
-    Nt = ceil(Int64, 1e4) # Test particles
+    Nt = ceil(Int64, 1e5) # Test particles
     F = Np / Nt
     Nc = 3 # Target number of test particles per cell
 
@@ -60,8 +60,12 @@ function harmonic_verification_trap(duration = 2)
     conditions = SimulationConditions(species, F, positions, velocities,
         accel, poten, evap = evap, τ_bg = τ_bg, K = K)
 
-    final_cloud = evolve(conditions, duration;
-        Nc = Nc, max_dt = max_dt, measure = measure)
+    if input_dir == ""
+        final_cloud = evolve(conditions, duration;
+            Nc = Nc, max_dt = max_dt, measure = measure)
+    else
+        sensor = loadsensor("$input_dir/sensor-data.csv")
+    end
 
     # Save sensor data (before plotting, in case plotting fails)
     ft = filetime()
@@ -86,7 +90,7 @@ function harmonic_verification_trap(duration = 2)
     scalefontsizes()
     scalefontsizes(1.5)
 
-    window_time = min(1e-2, duration/2)
+    window_time = min(4e-2, duration/2)
     time = sensor.time
     window_size = OptEvapCool.window_time_size(time, window_time)
     rolling_time = rollmean(time, window_size)
@@ -109,12 +113,12 @@ function harmonic_verification_trap(duration = 2)
         label = false,
         linecolor = col1,
         ls = :solid,
-        ylims = (0, Inf),
+        #ylims = (0, Inf),
         minorticks = 5,
         yformatter = temp_yformatter,
         dpi = 300)
-    plot!(peth_t, peth_T, label = false, linecolor = col2, ls = :dash)
-    plot!(pur_t, pur_T, label = false, linecolor = col3, ls = :dot)
+    #plot!(peth_t, peth_T, label = false, linecolor = col2, ls = :dash)
+    plot!(pur_t, pur_T, label = false, linecolor = col3, ls = :dash)
     
     # Number
     Np_series = sensor.Nt .* sensor.F
@@ -128,12 +132,12 @@ function harmonic_verification_trap(duration = 2)
         label = false,
         linecolor = col1,
         ls = :solid,
-        ylims = (0, Inf),
+        #ylims = (0, Inf),
         minorticks = 5,
         yformatter = num_yformatter,
         dpi = 300)
-    plot!(peth_t, peth_N, label = false, linecolor = col2, ls = :dash)
-    plot!(pur_t, pur_N, label = false, linecolor = col3, ls = :dot)
+    #plot!(peth_t, peth_N, label = false, linecolor = col2, ls = :dash)
+    plot!(pur_t, pur_N, label = false, linecolor = col3, ls = :dash)
 
     # Collrate
     rolling_timesteps = (
@@ -149,10 +153,11 @@ function harmonic_verification_trap(duration = 2)
         ylabel = "Collision rate (Hz)",
         label = false,
         linecolor = col1,
+        ylims = (250, 350),
         ls = :solid,
         dpi = 300)
-    plot!(peth_t, peth_Γ, label = false, linecolor = col2, ls = :dash)
-    plot!(pur_t, pur_Γ, label = false, linecolor = col3, ls = :dot)
+    #plot!(peth_t, peth_Γ, label = false, linecolor = col2, ls = :dash)
+    plot!(pur_t, pur_Γ, label = false, linecolor = col3, ls = :dash)
 
     # Phase space density
     rolling_n0 = rollmean(sensor.n0 .* sensor.F, window_size)
