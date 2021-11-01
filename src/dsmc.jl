@@ -102,7 +102,7 @@ function assign_cells!(cloud, peak_free_path, Nc, Vprev)
     # Cell dimensions
     V = min(Vprev, prod(maxpos - minpos)) # Volume estimate
     Vc = V * Nc / N
-    ds = min(cbrt(Vc), 0.1 * peak_free_path)
+    ds = min(cbrt(Vc), 0.05 * peak_free_path)
     cellsize = [ds, ds, ds]
     cloud.cellsize = cellsize
 
@@ -383,7 +383,7 @@ function evolve(conditions, duration; Nc = 1, max_dt = Inf,
         verlet_step!(cloud, conditions, t, dt)
 
         # Sort atoms by cell
-        peak_free_path = 1 / (4 * peak_density * σ);
+        peak_free_path = 1 / (4 * peak_density * cloud.F * σ);
         peak_density, gridshape, V = assign_cells!(cloud, peak_free_path, Nc, V)
 
         # Perform collisions
